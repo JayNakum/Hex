@@ -1,0 +1,3 @@
+[submodule "vendors/TaskMan"]
+	path = vendors/TaskMan
+	url = https://github.com/JayNakum/TaskMan.git

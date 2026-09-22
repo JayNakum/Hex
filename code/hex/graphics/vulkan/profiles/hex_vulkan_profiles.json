@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.khronos.org/vulkan/profiles-1.4.350.json",
+    "capabilities": {
+        "hex_vulkan_profile_capabilities": {
+            "extensions": {
+                "VK_KHR_swapchain": 1,
+                "VK_EXT_debug_utils": 1
+            },
+            "features": {
+                "VkPhysicalDeviceFeatures": {
+                    "fillModeNonSolid": true,
+                    "wideLines": true
+                }
+            }
+        }
+    },
+    "profiles": {
+        "HexVulkanProfile": {
+            "label": "Hex Vulkan Profile",
+            "description": "Extends Roadmap 2022",
+            "version": 1,
+            "api-version": "1.4.350",
+            "profiles": {
+                "VP_KHR_roadmap_2022": 1
+            },
+            "capabilities": [
+                "hex_vulkan_profile_capabilities"
+            ]
+        }
+    }
+}
