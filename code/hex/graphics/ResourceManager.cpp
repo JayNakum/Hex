@@ -8,10 +8,11 @@ namespace graphics
 {
     namespace
     {
-        constexpr std::array<VkDescriptorPoolSize, 3> kDescriptorPoolSizes = { {
+        constexpr std::array<VkDescriptorPoolSize, 4> kDescriptorPoolSizes = { {
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 16 },
             { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16 },
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16 },
+            { VK_DESCRIPTOR_TYPE_SAMPLER, 16 },
         } };
 
         struct Allocation
@@ -104,6 +105,11 @@ namespace graphics
 
     ResourceManager::~ResourceManager()
     {
+        for (std::unordered_map<std::string, VkSampler>::iterator it = mSamplers.begin(); it != mSamplers.end(); ++it)
+        {
+            vkDestroySampler(mDevice.get(), it->second, nullptr);
+        }
+
         for (std::unordered_map<std::string, VkImageView>::iterator it = mImageViews.begin(); it != mImageViews.end(); ++it)
         {
             vkDestroyImageView(mDevice.get(), it->second, nullptr);
@@ -178,8 +184,14 @@ namespace graphics
     VkExtent2D ResourceManager::getExtent(const std::string& name) const
     {
         const std::unordered_map<std::string, ImageResource>::const_iterator it = mImages.find(name);
-        HEX_ASSERT(it != mImages.end(), "Image resource with ID ", name, " does not exist.");
-        return it->second.vkExtent2D;
+        if (it != mImages.end())
+        {
+            return it->second.vkExtent2D;
+        }
+
+        const std::unordered_map<std::string, VkExtent2D>::const_iterator registeredIt = mRegisteredExtents.find(name);
+        HEX_ASSERT(registeredIt != mRegisteredExtents.end(), "Image resource with ID ", name, " does not exist.");
+        return registeredIt->second;
     }
 
     VkBuffer& ResourceManager::getBuffer(const std::string& name)
@@ -196,9 +208,9 @@ namespace graphics
         return it->second.vkBuffer;
     }
 
-    void ResourceManager::writeBuffer(const std::string& name, const void* data, const uint64_t size, const uint64_t offset)
+    void ResourceManager::writeBuffer(const std::string& name, const void* data, const uint64_t size, const uint64_t offset) const
     {
-        const std::unordered_map<std::string, BufferResource>::iterator it = mBuffers.find(name);
+        const std::unordered_map<std::string, BufferResource>::const_iterator it = mBuffers.find(name);
         HEX_ASSERT(it != mBuffers.end(), "Buffer resource with ID ", name, " does not exist.");
 
         const BufferResource& bufferResource = it->second;
@@ -230,21 +242,24 @@ namespace graphics
         return insertResult.first->second;
     }
 
-    VkImageView ResourceManager::getImageView(const std::string& name, const std::string& alias)
+    VkImageView ResourceManager::getImageView(const std::string& name, const std::string& alias) const
     {
         const std::string key = buildImageViewKey(name, alias);
-        const std::unordered_map<std::string, VkImageView>::iterator viewIt = mImageViews.find(key);
+        const std::unordered_map<std::string, VkImageView>::const_iterator viewIt = mImageViews.find(key);
         if (viewIt != mImageViews.end())
         {
             return viewIt->second;
         }
 
-        const std::unordered_map<std::string, ImageResource>::iterator it = mImages.find(name);
-        HEX_ASSERT(it != mImages.end(), "Image resource with ID ", name, " does not exist.");
+        const std::unordered_map<std::string, VkImageView>::const_iterator registeredIt = mRegisteredImageViews.find(name);
+        HEX_ASSERT(registeredIt != mRegisteredImageViews.end(), "Image view with alias ", alias, " does not exist for image resource ", name, ".");
+        return registeredIt->second;
+    }
 
-        const VkImageView vkImageView = buildImageView(mDevice, it->second, ImageViewCreateInfo{});
-        mImageViews.emplace(key, vkImageView);
-        return vkImageView;
+    void ResourceManager::registerImageView(const std::string& name, VkImageView vkImageView, const VkExtent2D& vkExtent2D)
+    {
+        mRegisteredImageViews[name] = vkImageView;
+        mRegisteredExtents[name] = vkExtent2D;
     }
 
     void ResourceManager::destroyImageView(const std::string& name, const std::string& alias)
@@ -269,6 +284,43 @@ namespace graphics
     {
         const std::unordered_map<std::string, ResourceTable>::iterator it = mResourceTables.find(name);
         HEX_ASSERT(it != mResourceTables.end(), "ResourceTable resource with ID ", name, " does not exist.");
+        return it->second;
+    }
+
+    VkSampler ResourceManager::createSampler(const std::string& name, const SamplerCreateInfo& createInfo)
+    {
+        const std::unordered_map<std::string, VkSampler>::iterator existingIt = mSamplers.find(name);
+        if (existingIt != mSamplers.end())
+        {
+            return existingIt->second;
+        }
+
+        VkSamplerCreateInfo vkSamplerCreateInfo{};
+        vkSamplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        vkSamplerCreateInfo.magFilter = createInfo.vkMagFilter;
+        vkSamplerCreateInfo.minFilter = createInfo.vkMinFilter;
+        vkSamplerCreateInfo.mipmapMode = createInfo.vkMipmapMode;
+        vkSamplerCreateInfo.addressModeU = createInfo.vkAddressModeU;
+        vkSamplerCreateInfo.addressModeV = createInfo.vkAddressModeV;
+        vkSamplerCreateInfo.addressModeW = createInfo.vkAddressModeW;
+        vkSamplerCreateInfo.anisotropyEnable = createInfo.maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
+        vkSamplerCreateInfo.maxAnisotropy = createInfo.maxAnisotropy;
+        vkSamplerCreateInfo.minLod = 0.0f;
+        vkSamplerCreateInfo.maxLod = VK_LOD_CLAMP_NONE;
+        vkSamplerCreateInfo.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+
+        VkSampler vkSampler = VK_NULL_HANDLE;
+        const VkResult vkResult = vkCreateSampler(mDevice.get(), &vkSamplerCreateInfo, nullptr, &vkSampler);
+        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to create VkSampler. ", utility::translateErrorCode(vkResult).c_str());
+
+        mSamplers.emplace(name, vkSampler);
+        return vkSampler;
+    }
+
+    VkSampler ResourceManager::getSampler(const std::string& name) const
+    {
+        const std::unordered_map<std::string, VkSampler>::const_iterator it = mSamplers.find(name);
+        HEX_ASSERT(it != mSamplers.end(), "Sampler resource with ID ", name, " does not exist.");
         return it->second;
     }
 

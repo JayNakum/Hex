@@ -12,49 +12,15 @@ namespace graphics
 namespace graphics
 {
     inline constexpr uint32_t FRAMES_IN_FLIGHT = 3;
-}
 
-namespace graphics
-{
-    class ResourceManager;
-
-    class GraphicsPass
-    {
-    public:
-        virtual ~GraphicsPass() = default;
-
-        virtual void resize(const uint32_t, const uint32_t, ResourceManager&) {}
-
-        virtual bool needsCopyDataToGPU() const { return false; }
-        virtual void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) = 0;
-        virtual void freeGPUUploadData(ResourceManager& resourceManager) = 0;
-
-        virtual void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, const uint32_t frameIndex = 0) = 0;
-    };
-
-    class ComputePass
-    {
-    public:
-        virtual ~ComputePass() = default;
-
-        virtual void resize(const uint32_t, const uint32_t, ResourceManager&) {}
-
-        virtual bool needsCopyDataToGPU() const { return false; }
-        virtual void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) = 0;
-        virtual void freeGPUUploadData(ResourceManager& resourceManager) = 0;
-
-        virtual void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, const uint32_t frameIndex = 0) = 0;
-    };
-}
-
-namespace graphics
-{
     struct alignas(16) FrameConstants
     {
         float totalTime = 0.0f;
         float deltaTime = 0.0f;
         uint32_t width = 0;
         uint32_t height = 0;
+        uint32_t index = 0;
+        uint32_t _padding[3] = { 0x1deadb0b, 0x1deadb0b, 0x1deadb0b };
     };
 
     struct alignas(16) PassConstants
@@ -162,5 +128,40 @@ namespace graphics
         FrameConstants mFrameConstants;
         PassConstants mPassConstants;
         bool mIsDirty = true;
+    };
+}
+
+namespace graphics
+{
+    class ResourceManager;
+
+    class GraphicsPass
+    {
+    public:
+        virtual ~GraphicsPass() = default;
+
+        virtual void resize(const uint32_t, const uint32_t, ResourceManager&) {}
+
+        virtual bool needsCopyDataToGPU() const { return false; }
+        virtual void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) = 0;
+        virtual void freeGPUUploadData(ResourceManager& resourceManager) = 0;
+
+        virtual void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame) = 0;
+        virtual void render(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame) = 0;
+    };
+
+    class ComputePass
+    {
+    public:
+        virtual ~ComputePass() = default;
+
+        virtual void resize(const uint32_t, const uint32_t, ResourceManager&) {}
+
+        virtual bool needsCopyDataToGPU() const { return false; }
+        virtual void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) = 0;
+        virtual void freeGPUUploadData(ResourceManager& resourceManager) = 0;
+
+        virtual void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame) = 0;
+        virtual void dispatch(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame) = 0;
     };
 }

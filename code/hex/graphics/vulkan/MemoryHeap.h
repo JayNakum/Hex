@@ -70,7 +70,7 @@ namespace graphics
         static constexpr uint64_t PERSISTENT_DATA_SIZE = memory::MB(32);
         static constexpr uint64_t BUFFER_BLOCK_SIZE = CONSTANTS_DATA_SIZE + TRANSIENT_DATA_SIZE + MESH_DATA_SIZE + PERSISTENT_DATA_SIZE;
 
-        static constexpr uint64_t RENDER_TARGET_DATA_SIZE = memory::MB(64);
+        static constexpr uint64_t RENDER_TARGET_DATA_SIZE = memory::MB(128);
         static constexpr uint64_t TEXTURE_DATA_SIZE = memory::MB(128);
         static constexpr uint64_t IMAGE_BLOCK_SIZE = RENDER_TARGET_DATA_SIZE + TEXTURE_DATA_SIZE;
 

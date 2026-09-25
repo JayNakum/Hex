@@ -35,6 +35,17 @@ namespace graphics
             uint32_t layerCount = 1;
         };
 
+        struct SamplerCreateInfo
+        {
+            VkFilter vkMagFilter = VK_FILTER_LINEAR;
+            VkFilter vkMinFilter = VK_FILTER_LINEAR;
+            VkSamplerMipmapMode vkMipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            VkSamplerAddressMode vkAddressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            VkSamplerAddressMode vkAddressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            VkSamplerAddressMode vkAddressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            float maxAnisotropy = 1.0f;
+        };
+
         ResourceManager(const Device& device, const PhysicalDevice& physicalDevice);
         ~ResourceManager();
 
@@ -55,16 +66,21 @@ namespace graphics
         VkExtent2D getExtent(const std::string& name) const;
         VkBuffer& getBuffer(const std::string& name);
         const VkBuffer& getBuffer(const std::string& name) const;
-        void writeBuffer(const std::string& name, const void* data, const uint64_t size, const uint64_t offset = 0);
+        void writeBuffer(const std::string& name, const void* data, const uint64_t size, const uint64_t offset = 0) const;
 
         void transitionImage(CommandContext& context, const std::string& name, const ResourceState& newState);
 
         VkImageView createImageView(const std::string& name, const ImageViewCreateInfo& viewInfo, const std::string& alias);
-        VkImageView getImageView(const std::string& name, const std::string& alias = "");
+        VkImageView getImageView(const std::string& name, const std::string& alias = "") const;
         void destroyImageView(const std::string& name, const std::string& alias = "");
+
+        void registerImageView(const std::string& name, VkImageView vkImageView, const VkExtent2D& vkExtent2D);
 
         ResourceTable& createResourceTable(const std::string& name, const ResourceTable::Layout& layout);
         ResourceTable& getResourceTable(const std::string& name);
+
+        VkSampler createSampler(const std::string& name, const SamplerCreateInfo& createInfo);
+        VkSampler getSampler(const std::string& name) const;
 
         inline MemoryHeap& memoryHeap() { return mMemoryHeap; }
         inline DescriptorPool& descriptorAllocator() { return mDescriptorPool; }
@@ -106,5 +122,8 @@ namespace graphics
         std::unordered_map<std::string, VkImageView> mImageViews;
         std::unordered_map<std::string, BufferResource> mBuffers;
         std::unordered_map<std::string, ResourceTable> mResourceTables;
+        std::unordered_map<std::string, VkSampler> mSamplers;
+        std::unordered_map<std::string, VkImageView> mRegisteredImageViews;
+        std::unordered_map<std::string, VkExtent2D> mRegisteredExtents;
     };
 }

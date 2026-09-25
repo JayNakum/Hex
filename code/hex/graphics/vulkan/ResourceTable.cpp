@@ -83,6 +83,7 @@ namespace graphics
             vkDescriptorSetLayoutBinding.descriptorType = range.vkDescriptorType;
             vkDescriptorSetLayoutBinding.descriptorCount = range.count;
             vkDescriptorSetLayoutBinding.stageFlags = layout.vkShaderStageFlagsVisibility;
+            vkDescriptorSetLayoutBinding.pImmutableSamplers = (range.vkImmutableSampler != VK_NULL_HANDLE) ? &range.vkImmutableSampler : nullptr;
 
             vkDescriptorSetLayoutBindings.push_back(vkDescriptorSetLayoutBinding);
         }

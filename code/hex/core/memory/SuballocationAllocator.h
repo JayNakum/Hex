@@ -84,9 +84,9 @@ namespace memory
 
             HEX_ASSERT(getUnallocatedSize() >= sizeInBytes,
                 "Allocator out of memory trying to allocate ", sizeInBytes, " bytes",
-                ". Total size = %d", mTotalSizeInBytes,
-                ". Fragmented size = %d", getFragmentedSize(),
-                ". Unallocated Size = %d", getUnallocatedSize(),
+                ". Total size = ", mTotalSizeInBytes,
+                ". Fragmented size = ", getFragmentedSize(),
+                ". Unallocated Size = ", getUnallocatedSize(),
                 ".");
 
             allocationOffset = mNextAllocationOffset;

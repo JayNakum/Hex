@@ -34,7 +34,7 @@ namespace graphics
         Renderer& operator=(const Renderer&) = delete;
 
         void update(const double timeStep);
-        void render(const FrameConstants& frameConstants);
+        void render(FrameConstants frameConstants);
 
         void resize(const uint32_t width, const uint32_t height);
 
@@ -78,8 +78,5 @@ namespace graphics
         std::vector<VkFence> mVkFencesImagesInFlight;
 
         uint32_t mCurrentFrame;
-
-        float mLastTotalTime;
-        float mLastDeltaTime;
     };
 }

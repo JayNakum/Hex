@@ -1,5 +1,7 @@
 #include "PresentPass.h"
 
+#include "ImGUI.h"
+
 #include "vulkan/Device.h"
 #include "vulkan/utility.h"
 
@@ -9,12 +11,43 @@
 
 namespace graphics
 {
-    ResourceTable::Layout PresentPass::buildSourceTableLayout()
+    void PresentPassData::imGUIRender()
     {
+        ImGui::Begin("Present Pass Data");
+
+        imGUICommonParams();
+        imGUISave();
+
+        ImGui::End();
+    }
+
+    void PresentPassData::reset()
+    {
+        mParams = Params{};
+    }
+
+    ResourceTable::Layout PresentPass::buildSourceTableLayout(ResourceManager& resourceManager)
+    {
+        const VkSampler vkSamplerLinearClamp = resourceManager.createSampler("Sampler_LinearClamp", ResourceManager::SamplerCreateInfo{});
+
         ResourceTable::Layout layout{};
         layout.vkShaderStageFlagsVisibility = VK_SHADER_STAGE_FRAGMENT_BIT;
-        layout.ranges = { { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1 } };
+        layout.ranges = {
+            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
+            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1 },
+            { VK_DESCRIPTOR_TYPE_SAMPLER, 1, vkSamplerLinearClamp },
+            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 }
+        };
         return layout;
+    }
+
+    std::vector<VkPushConstantRange> PresentPass::buildPushConstantRanges()
+    {
+        VkPushConstantRange range{};
+        range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        range.offset = 0;
+        range.size = sizeof(FrameConstants);
+        return { range };
     }
 
     Pipeline PresentPass::buildPipeline(const Device& device, const VkFormat colorFormat, const ShaderInput& shaderInput)
@@ -49,14 +82,27 @@ namespace graphics
     }
 
     PresentPass::PresentPass(const Device& device, ResourceManager& resourceManager, const VkFormat colorFormat)
-        : mSourceTable{ {
-            ResourceTable{ device, resourceManager.descriptorAllocator(), buildSourceTableLayout() },
-            ResourceTable{ device, resourceManager.descriptorAllocator(), buildSourceTableLayout() },
-            ResourceTable{ device, resourceManager.descriptorAllocator(), buildSourceTableLayout() }
+        : mPassData{}
+        , mSourceTable{ {
+            ResourceTable{ device, resourceManager.descriptorAllocator(), buildSourceTableLayout(resourceManager) },
+            ResourceTable{ device, resourceManager.descriptorAllocator(), buildSourceTableLayout(resourceManager) },
+            ResourceTable{ device, resourceManager.descriptorAllocator(), buildSourceTableLayout(resourceManager) }
         } }
-        , mShaderInput{ ShaderInput::CreateInfo{ { mSourceTable[0].getDescriptorSetLayout() }, {} } }
+        , mShaderInput{ ShaderInput::CreateInfo{ { mSourceTable[0].getDescriptorSetLayout() }, buildPushConstantRanges() } }
         , mPipeline{ buildPipeline(device, colorFormat, mShaderInput) }
     {
+        for (uint32_t frameIndex = 0; frameIndex < FRAMES_IN_FLIGHT; ++frameIndex)
+        {
+            resourceManager.createBuffer(
+                frameResourceID("Present_CB_PassConstants", frameIndex),
+                ResourceManager::BufferCreateInfo{ sizeof(PassConstants), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT },
+                MemoryHeap::ResourceCategory::UploadPersistentData);
+
+            resourceManager.createBuffer(
+                frameResourceID("CB_BlitParams", frameIndex),
+                ResourceManager::BufferCreateInfo{ sizeof(BlitParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT },
+                MemoryHeap::ResourceCategory::UploadPersistentData);
+        }
     }
 
     void PresentPass::copyDataToGPU(CommandContext&, ResourceManager&)
@@ -67,30 +113,52 @@ namespace graphics
     {
     }
 
-    void PresentPass::getInputOutputs(CommandContext& context, ResourceManager& resourceManager, const uint32_t frameIndex)
+    void PresentPass::getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame)
     {
-        resourceManager.transitionImage(context, frameResourceID("UA_OutputColor", frameIndex), ResourceStates::PixelShaderResource);
+        resourceManager.transitionImage(context, frameResourceID("UA_OutputColor", frame.index), ResourceStates::PixelShaderResource);
     }
 
-    void PresentPass::render(CommandContext& context, ResourceManager& resourceManager, const VkImageView vkImageViewTarget, const VkExtent2D& vkExtent2D, const uint32_t frameIndex)
+    void PresentPass::render(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame)
     {
-        const VkImageView vkImageViewSource = resourceManager.getImageView(frameResourceID("UA_OutputColor", frameIndex), "RT_OutputColor");
+        const std::string sourceName = frameResourceID("UA_OutputColor", frame.index);
+        const VkImageView vkImageViewSource = resourceManager.getImageView(sourceName, "RT_OutputColor");
+        const VkExtent2D vkExtent2DSource = resourceManager.getExtent(sourceName);
 
-        ResourceTable& sourceTable = mSourceTable[frameIndex];
-        sourceTable.setResource(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, vkImageViewSource, ResourceStates::PixelShaderResource);
+        const VkImageView vkImageViewTarget = resourceManager.getImageView("BackBuffer");
+        const VkExtent2D vkExtent2DTarget = resourceManager.getExtent("BackBuffer");
+
+        const BlitParams blitParams{
+            static_cast<float>(vkExtent2DSource.width),
+            static_cast<float>(vkExtent2DSource.height),
+            static_cast<float>(vkExtent2DTarget.width),
+            static_cast<float>(vkExtent2DTarget.height)
+        };
+
+        const std::string passConstantsBufferName = frameResourceID("Present_CB_PassConstants", frame.index);
+        const PassConstants passConstants = mPassData.getPassConstants();
+        resourceManager.writeBuffer(passConstantsBufferName, &passConstants, sizeof(passConstants));
+
+        const std::string blitParamsBufferName = frameResourceID("CB_BlitParams", frame.index);
+        resourceManager.writeBuffer(blitParamsBufferName, &blitParams, sizeof(blitParams));
+
+        ResourceTable& sourceTable = mSourceTable[frame.index];
+        sourceTable.setResource(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, resourceManager.getBuffer(passConstantsBufferName));
+        sourceTable.setResource(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, vkImageViewSource, ResourceStates::PixelShaderResource);
+        sourceTable.setResource(3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, resourceManager.getBuffer(blitParamsBufferName));
 
         CommandContext::RenderingInfo renderingInfo{};
         renderingInfo.vkImageViewColor = vkImageViewTarget;
-        renderingInfo.vkRect2DExtent = { { 0, 0 }, vkExtent2D };
+        renderingInfo.vkRect2DExtent = { { 0, 0 }, vkExtent2DTarget };
         renderingInfo.clear = false;
 
         context.beginRendering(renderingInfo);
 
-        context.setViewport(0.0f, 0.0f, static_cast<float>(vkExtent2D.width), static_cast<float>(vkExtent2D.height));
-        context.setScissor(0, 0, vkExtent2D.width, vkExtent2D.height);
+        context.setViewport(0.0f, 0.0f, static_cast<float>(vkExtent2DTarget.width), static_cast<float>(vkExtent2DTarget.height));
+        context.setScissor(0, 0, vkExtent2DTarget.width, vkExtent2DTarget.height);
 
         context.bindPipeline(mPipeline);
 
+        mShaderInput.setConstants(0, &frame, sizeof(frame));
         mShaderInput.setResourceTable(0, sourceTable);
         mShaderInput.finalize(context);
 

@@ -6,9 +6,7 @@
 
 #include "PassCore.h"
 
-#if defined(HEX_IMGUI_ENABLED)
 #include <imgui.h>
-#endif
 
 struct GLFWwindow;
 
@@ -39,9 +37,9 @@ namespace graphics
 
         void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) override;
         void freeGPUUploadData(ResourceManager& resourceManager) override;
-        void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, const uint32_t frameIndex = 0) override;
+        void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame) override;
 
-        void render(CommandContext& context, const VkImageView vkImageViewTarget, const VkExtent2D vkExtent2D);
+        void render(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame) override;
 
     private:
         static std::mutex msCallbackMutex;

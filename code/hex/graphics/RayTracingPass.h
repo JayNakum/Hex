@@ -21,6 +21,10 @@ namespace graphics
     class RayTracingPassData : public PassData
     {
     public:
+        static constexpr uint32_t IMAGE_WIDTH = 3840;
+        static constexpr uint32_t IMAGE_HEIGHT = 2160;
+        static constexpr VkFormat SCENE_COLOR_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
+
         struct Params
         {
 
@@ -40,14 +44,14 @@ namespace graphics
     class RayTracingPass : public ComputePass
     {
     public:
-        RayTracingPass(const Device& device, ResourceManager& resourceManager, const uint32_t width, const uint32_t height);
+        RayTracingPass(const Device& device, ResourceManager& resourceManager);
 
         void resize(const uint32_t width, const uint32_t height, ResourceManager& resourceManager) override;
 
         void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) override;
         void freeGPUUploadData(ResourceManager& resourceManager) override;
-        void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, const uint32_t frameIndex = 0) override;
-        void dispatch(CommandContext& context, ResourceManager& resourceManager, const FrameConstants& frame, const uint32_t frameIndex);
+        void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame) override;
+        void dispatch(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame) override;
 
     private:
         static ResourceTable::Layout buildResourceTableLayout();
@@ -55,8 +59,6 @@ namespace graphics
         static Pipeline buildPipeline(const Device& device, const ShaderInput& shaderInput);
 
     private:
-        static constexpr VkFormat SCENE_COLOR_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
-
         RayTracingPassData mPassData;
 
         std::array<ResourceTable, FRAMES_IN_FLIGHT> mResourceTable;

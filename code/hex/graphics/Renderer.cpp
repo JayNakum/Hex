@@ -75,7 +75,7 @@ namespace graphics
             mWindow.getDescription().height } }
         , mGraphicsContextPool{ mDevice, CommandContext::CreateInfo{ mGraphicsFamilyIndex } }
         , mComputeContextPool{ mDevice, CommandContext::CreateInfo{ mGraphicsFamilyIndex } }
-        , mRayTracingPass{ mDevice, mResourceManager, mSwapchain->getExtent().width, mSwapchain->getExtent().height }
+        , mRayTracingPass{ mDevice, mResourceManager }
         , mPresentPass{ mDevice, mResourceManager, mSwapchain->getFormat() }
         , mImGuiPass{ mInstance, mPhysicalDevice, mDevice, mVkQueueGraphics, mGraphicsFamilyIndex, mSwapchain->getFormat(), static_cast<uint32_t>(mSwapchain->getImageCount()), mWindow.get() }
         , mVkSemaphoresComputeFinished{}
@@ -85,9 +85,9 @@ namespace graphics
         , mVkFencesCompute{}
         , mVkFencesImagesInFlight{ mSwapchain->getImageCount(), VK_NULL_HANDLE }
         , mCurrentFrame{ 0 }
-        , mLastTotalTime{ 0.0f }
-        , mLastDeltaTime{ 0.0f }
     {
+        mResourceManager.registerImageView("BackBuffer", VK_NULL_HANDLE, mSwapchain->getExtent());
+
         for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
         {
             mVkSemaphoresComputeFinished[i] = createSemaphore(mDevice);
@@ -114,16 +114,13 @@ namespace graphics
     {
     }
 
-    void Renderer::render(const FrameConstants& frameConstants)
+    void Renderer::render(FrameConstants frame)
     {
-        mLastTotalTime = frameConstants.totalTime;
-        mLastDeltaTime = frameConstants.deltaTime;
+        frame.index = mCurrentFrame % FRAMES_IN_FLIGHT;
 
-        const uint32_t frameIndex = mCurrentFrame % FRAMES_IN_FLIGHT;
-
-        if (mVkFencesGraphics[frameIndex] != VK_NULL_HANDLE)
+        if (mVkFencesGraphics[frame.index] != VK_NULL_HANDLE)
         {
-            const VkResult vkResultGraphicsWait = vkWaitForFences(mDevice.get(), 1, &mVkFencesGraphics[frameIndex], VK_TRUE, UINT64_MAX);
+            const VkResult vkResultGraphicsWait = vkWaitForFences(mDevice.get(), 1, &mVkFencesGraphics[frame.index], VK_TRUE, UINT64_MAX);
             HEX_ASSERT(vkResultGraphicsWait == VK_SUCCESS, "Failed to wait for graphics VkFence. ", utility::translateErrorCode(vkResultGraphicsWait).c_str());
         }
 
@@ -134,6 +131,8 @@ namespace graphics
             resize(description.width, description.height);
             return;
         }
+        const VkImage vkImageBackBuffer = backBuffer.image;
+        mResourceManager.registerImageView("BackBuffer", backBuffer.view, backBuffer.extent);
 
         VkFence& vkFenceImageInFlight = mVkFencesImagesInFlight[backBuffer.imageIndex];
         if (vkFenceImageInFlight != VK_NULL_HANDLE)
@@ -142,18 +141,18 @@ namespace graphics
             HEX_ASSERT(vkResultImageWait == VK_SUCCESS, "Failed to wait for image-in-flight VkFence. ", utility::translateErrorCode(vkResultImageWait).c_str());
         }
 
-        if (mVkFencesCompute[frameIndex] != VK_NULL_HANDLE)
+        if (mVkFencesCompute[frame.index] != VK_NULL_HANDLE)
         {
-            const VkResult vkResultComputeWait = vkWaitForFences(mDevice.get(), 1, &mVkFencesCompute[frameIndex], VK_TRUE, UINT64_MAX);
+            const VkResult vkResultComputeWait = vkWaitForFences(mDevice.get(), 1, &mVkFencesCompute[frame.index], VK_TRUE, UINT64_MAX);
             HEX_ASSERT(vkResultComputeWait == VK_SUCCESS, "Failed to wait for compute VkFence. ", utility::translateErrorCode(vkResultComputeWait).c_str());
         }
 
         CommandContext& computeContext = mComputeContextPool.requestContext();
-        mVkFencesCompute[frameIndex] = computeContext.getFence();
+        mVkFencesCompute[frame.index] = computeContext.getFence();
         computeContext.reset();
 
-        mRayTracingPass.getInputOutputs(computeContext, mResourceManager, frameIndex);
-        mRayTracingPass.dispatch(computeContext, mResourceManager, frameConstants, frameIndex);
+        mRayTracingPass.getInputOutputs(computeContext, mResourceManager, frame);
+        mRayTracingPass.dispatch(computeContext, mResourceManager, frame);
 
         computeContext.finish();
 
@@ -163,17 +162,17 @@ namespace graphics
 
         VkSemaphoreSubmitInfo vkSemaphoreSubmitInfoWaitCompute{};
         vkSemaphoreSubmitInfoWaitCompute.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfoWaitCompute.semaphore = mVkSemaphoresGraphicsReadDone[frameIndex];
+        vkSemaphoreSubmitInfoWaitCompute.semaphore = mVkSemaphoresGraphicsReadDone[frame.index];
         vkSemaphoreSubmitInfoWaitCompute.stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
         VkSemaphoreSubmitInfo vkSemaphoreSubmitInfoSignalCompute{};
         vkSemaphoreSubmitInfoSignalCompute.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfoSignalCompute.semaphore = mVkSemaphoresComputeFinished[frameIndex];
+        vkSemaphoreSubmitInfoSignalCompute.semaphore = mVkSemaphoresComputeFinished[frame.index];
         vkSemaphoreSubmitInfoSignalCompute.stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
         VkSubmitInfo2 vkSubmitInfo2Compute{};
         vkSubmitInfo2Compute.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        vkSubmitInfo2Compute.waitSemaphoreInfoCount = mHasGraphicsReadPending[frameIndex] ? 1u : 0u;
+        vkSubmitInfo2Compute.waitSemaphoreInfoCount = mHasGraphicsReadPending[frame.index] ? 1u : 0u;
         vkSubmitInfo2Compute.pWaitSemaphoreInfos = &vkSemaphoreSubmitInfoWaitCompute;
         vkSubmitInfo2Compute.commandBufferInfoCount = 1;
         vkSubmitInfo2Compute.pCommandBufferInfos = &vkCommandBufferSubmitInfoCompute;
@@ -183,23 +182,19 @@ namespace graphics
         const VkResult vkResultComputeSubmit = vkQueueSubmit2(mVkQueueCompute, 1, &vkSubmitInfo2Compute, computeContext.getFence());
         HEX_ASSERT(vkResultComputeSubmit == VK_SUCCESS, "Failed to submit to compute VkQueue. ", utility::translateErrorCode(vkResultComputeSubmit).c_str());
 
-        const VkImage vkImageBackBuffer = backBuffer.image;
-        const VkImageView vkImageViewBackBuffer = backBuffer.view;
-        const VkExtent2D vkExtent2D = backBuffer.extent;
-
         CommandContext& graphicsContext = mGraphicsContextPool.requestContext();
-        mVkFencesGraphics[frameIndex] = graphicsContext.getFence();
+        mVkFencesGraphics[frame.index] = graphicsContext.getFence();
         vkFenceImageInFlight = graphicsContext.getFence();
         graphicsContext.reset();
 
         graphicsContext.transitionBarrier(vkImageBackBuffer, ResourceStates::Undefined, ResourceStates::RenderTarget);
 
-        mPresentPass.getInputOutputs(graphicsContext, mResourceManager, frameIndex);
-        mPresentPass.render(graphicsContext, mResourceManager, vkImageViewBackBuffer, vkExtent2D, frameIndex);
+        mPresentPass.getInputOutputs(graphicsContext, mResourceManager, frame);
+        mPresentPass.render(graphicsContext, mResourceManager, frame);
 
         graphicsContext.transitionBarrier(vkImageBackBuffer, ResourceStates::RenderTarget, ResourceStates::RenderTarget);
 
-        mImGuiPass.render(graphicsContext, vkImageViewBackBuffer, vkExtent2D);
+        mImGuiPass.render(graphicsContext, mResourceManager, frame);
 
         graphicsContext.transitionBarrier(vkImageBackBuffer, ResourceStates::RenderTarget, ResourceStates::Present);
 
@@ -214,7 +209,7 @@ namespace graphics
         vkSemaphoreSubmitInfosWaitGraphics[0].semaphore = backBuffer.imageAvailable;
         vkSemaphoreSubmitInfosWaitGraphics[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
         vkSemaphoreSubmitInfosWaitGraphics[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfosWaitGraphics[1].semaphore = mVkSemaphoresComputeFinished[frameIndex];
+        vkSemaphoreSubmitInfosWaitGraphics[1].semaphore = mVkSemaphoresComputeFinished[frame.index];
         vkSemaphoreSubmitInfosWaitGraphics[1].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 
         std::array<VkSemaphoreSubmitInfo, 2> vkSemaphoreSubmitInfosSignalGraphics{};
@@ -222,7 +217,7 @@ namespace graphics
         vkSemaphoreSubmitInfosSignalGraphics[0].semaphore = backBuffer.renderFinished;
         vkSemaphoreSubmitInfosSignalGraphics[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
         vkSemaphoreSubmitInfosSignalGraphics[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfosSignalGraphics[1].semaphore = mVkSemaphoresGraphicsReadDone[frameIndex];
+        vkSemaphoreSubmitInfosSignalGraphics[1].semaphore = mVkSemaphoresGraphicsReadDone[frame.index];
         vkSemaphoreSubmitInfosSignalGraphics[1].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 
         VkSubmitInfo2 vkSubmitInfo2Graphics{};
@@ -237,7 +232,7 @@ namespace graphics
         const VkResult vkResultGraphicsSubmit = vkQueueSubmit2(mVkQueueGraphics, 1, &vkSubmitInfo2Graphics, graphicsContext.getFence());
         HEX_ASSERT(vkResultGraphicsSubmit == VK_SUCCESS, "Failed to submit to graphics VkQueue. ", utility::translateErrorCode(vkResultGraphicsSubmit).c_str());
 
-        mHasGraphicsReadPending[frameIndex] = true;
+        mHasGraphicsReadPending[frame.index] = true;
 
         if (!mSwapchain->present(mVkQueueGraphics, backBuffer))
         {

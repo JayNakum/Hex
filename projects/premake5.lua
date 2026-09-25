@@ -36,8 +36,6 @@ workspace "Hex"
 
   configurations { "Debug", "Profile", "Release" }
 
-  defines { "HEX_IMGUI_ENABLED" }
-
   filter "configurations:Debug"
     runtime "Debug"
     symbols "On"

@@ -15,6 +15,7 @@ namespace graphics
         {
             VkDescriptorType vkDescriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             uint32_t count = 1;
+            VkSampler vkImmutableSampler = VK_NULL_HANDLE;
         };
 
         struct Layout

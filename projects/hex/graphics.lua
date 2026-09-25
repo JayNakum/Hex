@@ -12,6 +12,7 @@ project "graphics"
     "%{prj_src.hex}/graphics/**.hpp",
     "%{prj_src.hex}/graphics/**.cpp",
     "%{prj_src.hex}/graphics/**.slang",
+    "%{prj_src.hex}/graphics/**.slangh",
     "%{prj_src.hex}/graphics/**.json",
     "%{dependencies.volk}/volk.c",
     "%{dependencies.imgui}/imgui.cpp",
@@ -36,10 +37,6 @@ project "graphics"
     "%{dependencies.imgui}",
     "%{dependencies.imgui}/backends",
 
-    -- maths headers use anonymous struct/union swizzles and direct float ==
-    -- comparisons by design; treat as external so -Werror doesn't trip on them.
-    -- Needed here too: passes precompute values (matrices, vectors) on the CPU
-    -- and upload them, rather than computing them in-shader.
     "%{prj_src.hex}/maths/",
   }
 
@@ -61,10 +58,6 @@ project "graphics"
     warnings "Off"
   filter {}
 
-  -- VULKAN PROFILES: --output-library-src is intentionally omitted so the generator only emits
-  -- the header-only profiles.hpp (VPAPI_ATTR = inline, included via vkCommon.h) and skips the
-  -- split profiles.h/.cpp library variant, whose VPAPI_ATTR symbols have external linkage and
-  -- would otherwise ODR-clash with the inline definitions pulled into every TU via profiles.hpp.
   filter "files:**/profiles/hex_vulkan_profiles.json"
     buildmessage "Generating Vulkan Profiles"
 
@@ -89,8 +82,11 @@ project "graphics"
     "{MKDIR} %{shader_out_dir}"
   }
 
+  local slangHeaders = os.matchfiles(path.join(_SCRIPT_DIR, "../../code/hex/graphics/**.slangh"))
+
   filter "files:**.slang"
     buildmessage "Compiling Shader: %{file.name}"
+    buildinputs (slangHeaders)
     buildoutputs { "%{shader_out_dir}/%{file.basename}.spv" }
   filter { "files:**.slang", "configurations:Debug" }
     buildcommands { '"%{slangc_bin}" "%{file.relpath}" -target spirv -fvk-use-entrypoint-name -O0 -g2 -o "%{shader_out_dir}/%{file.basename}.spv"' }

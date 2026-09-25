@@ -1,14 +1,14 @@
 #include "ImGUI.h"
 
-#if defined(HEX_IMGUI_ENABLED)
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
-#endif
 
 #include "vulkan/Instance.h"
 #include "vulkan/PhysicalDevice.h"
 #include "vulkan/Device.h"
 #include "vulkan/CommandContext.h"
+
+#include "ResourceManager.h"
 
 namespace graphics
 {
@@ -20,8 +20,6 @@ namespace graphics
         std::lock_guard<std::mutex> scopedLockGuard(msCallbackMutex);
         msRenderCallbacks.push_back(std::move(callback));
     }
-
-#if defined(HEX_IMGUI_ENABLED)
 
     void ImGuiPass::matrix(const char* label, mat4f& matrix)
     {
@@ -117,12 +115,15 @@ namespace graphics
     {
     }
 
-    void ImGuiPass::getInputOutputs(CommandContext&, ResourceManager&, const uint32_t)
+    void ImGuiPass::getInputOutputs(CommandContext&, ResourceManager&, FrameConstants)
     {
     }
 
-    void ImGuiPass::render(CommandContext& context, const VkImageView vkImageViewTarget, const VkExtent2D vkExtent2D)
+    void ImGuiPass::render(CommandContext& context, const ResourceManager& resourceManager, FrameConstants)
     {
+        const VkImageView vkImageViewTarget = resourceManager.getImageView("BackBuffer");
+        const VkExtent2D vkExtent2D = resourceManager.getExtent("BackBuffer");
+
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -163,42 +164,4 @@ namespace graphics
             ImGui::RenderPlatformWindowsDefault();
         }
     }
-
-#else
-
-    void ImGuiPass::matrix(const char*, mat4f&)
-    {
-    }
-
-    void ImGuiPass::matrixInput(const char*, mat4f&)
-    {
-    }
-
-    ImGuiPass::ImGuiPass(const Instance&, const PhysicalDevice&, const Device&, VkQueue, const uint32_t, const VkFormat, const uint32_t, GLFWwindow*)
-    {
-    }
-
-    ImGuiPass::~ImGuiPass()
-    {
-        std::lock_guard<std::mutex> scopedLockGuard(msCallbackMutex);
-        msRenderCallbacks.clear();
-    }
-
-    void ImGuiPass::copyDataToGPU(CommandContext&, ResourceManager&)
-    {
-    }
-
-    void ImGuiPass::freeGPUUploadData(ResourceManager&)
-    {
-    }
-
-    void ImGuiPass::getInputOutputs(CommandContext&, ResourceManager&, const uint32_t)
-    {
-    }
-
-    void ImGuiPass::render(CommandContext&, const VkImageView, const VkExtent2D)
-    {
-    }
-
-#endif
 }
