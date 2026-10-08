@@ -18,7 +18,7 @@ namespace graphics
     class CommandContext;
     class ResourceManager;
 
-    class ImGuiPass : public GraphicsPass
+    class ImGuiPass : public RenderPass
     {
     public:
         static void registerWindow(std::function<void()> callback);
@@ -35,14 +35,36 @@ namespace graphics
         ImGuiPass(ImGuiPass&&) = delete;
         ImGuiPass& operator=(ImGuiPass&&) = delete;
 
-        void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) override;
-        void freeGPUUploadData(ResourceManager& resourceManager) override;
-        void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame) override;
+        void copyDataToGPU(CommandContext&, const QueueFamilies&, ResourceManager&) override {}
+        void freeGPUUploadData(ResourceManager&) override {}
+        void preRender(CommandContext&, const QueueFamilies&, ResourceManager&, FrameConstants) override {}
 
         void render(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame) override;
+        void postRender(CommandContext&, const QueueFamilies&, ResourceManager&, FrameConstants) override {}
+
+        ImTextureID createTextureRGBA(CommandContext& context, const std::string& id, const uint32_t width, const uint32_t height, const void* rgba8);
+        void destroyTexture(const std::string& id);
+
+    private:
+        struct Texture
+        {
+            VkImage vkImage = VK_NULL_HANDLE;
+            VkDeviceMemory vkDeviceMemory = VK_NULL_HANDLE;
+            VkImageView vkImageView = VK_NULL_HANDLE;
+            VkSampler vkSampler = VK_NULL_HANDLE;
+            VkDescriptorSet vkDescriptorSet = VK_NULL_HANDLE;
+        };
+
+        void destroyTexture(Texture& texture);
 
     private:
         static std::mutex msCallbackMutex;
         static std::vector<std::function<void()>> msRenderCallbacks;
+
+        const PhysicalDevice& mPhysicalDevice;
+        const Device& mDevice;
+
+        std::unordered_map<std::string, Texture> mTextures;
+        std::vector<std::pair<VkBuffer, VkDeviceMemory>> mStagingBuffersPendingFree;
     };
 }

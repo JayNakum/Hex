@@ -30,6 +30,8 @@ workspace "Hex"
       "unsafe-buffer-usage"
     }
 
+  defines { 'HEX_ASSETS_DIR="' .. assets_path .. '"' }
+
   filter "system:Windows"
     architecture "x64"
     defines { "HEX_WINDOWS" }

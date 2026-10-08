@@ -37,15 +37,16 @@ namespace graphics
 
     class ResourceManager;
 
-    class PresentPass : public GraphicsPass
+    class PresentPass : public RenderPass
     {
     public:
         PresentPass(const Device& device, ResourceManager& resourceManager, const VkFormat colorFormat);
 
-        void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) override;
-        void freeGPUUploadData(ResourceManager& resourceManager) override;
-        void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame) override;
+        void copyDataToGPU(CommandContext&, const QueueFamilies&, ResourceManager&) override {}
+        void freeGPUUploadData(ResourceManager&) override {}
+        void preRender(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame) override;
         void render(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame) override;
+        void postRender(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame) override;
 
     private:
         struct BlitParams
@@ -59,11 +60,11 @@ namespace graphics
         static ResourceTable::Layout buildSourceTableLayout(ResourceManager& resourceManager);
         static std::vector<VkPushConstantRange> buildPushConstantRanges();
         static Pipeline buildPipeline(const Device& device, const VkFormat colorFormat, const ShaderInput& shaderInput);
+        static VkDescriptorSetLayout createSourceTables(ResourceManager& resourceManager);
 
     private:
         PresentPassData mPassData;
 
-        std::array<ResourceTable, FRAMES_IN_FLIGHT> mSourceTable;
         ShaderInput mShaderInput;
         Pipeline mPipeline;
     };

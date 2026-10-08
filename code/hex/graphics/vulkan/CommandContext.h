@@ -43,7 +43,8 @@ namespace graphics
         void beginRendering(const RenderingInfo& renderingInfo);
         void endRendering();
 
-        void transitionBarrier(VkImage vkImage, const ResourceState& vkResourceStateOld, const ResourceState& vkResourceStateNew, const VkImageAspectFlags vkImageAspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
+        void transitionBarrier(const VkBuffer& vkBuffer, const ResourceState& vkResourceStateOld, const ResourceState& vkResourceStateNew, const uint32_t srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, const uint32_t dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, const uint64_t size = VK_WHOLE_SIZE, const uint64_t offset = 0);
+        void transitionBarrier(const VkImage& vkImage, const ResourceState& vkResourceStateOld, const ResourceState& vkResourceStateNew, const VkImageAspectFlags vkImageAspectFlags = VK_IMAGE_ASPECT_COLOR_BIT, const uint32_t srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, const uint32_t dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED);
 
         void copyBuffer(const VkBuffer& vkBufferSrc, const VkBuffer& vkBufferDst, const uint64_t size, const uint64_t srcOffset = 0, const uint64_t dstOffset = 0);
         void copyBufferToImage(const VkBuffer& vkBufferSrc, VkImage& vkImageDst, const uint32_t width, const uint32_t height, const uint32_t depth = 1);
@@ -66,7 +67,7 @@ namespace graphics
         void dispatch3D(const uint32_t threadCountX, const uint32_t threadCountY, const uint32_t threadCountZ, const uint32_t groupSizeX, const uint32_t groupSizeY, const uint32_t groupSizeZ);
 
         void reset();
-        void finish();
+        VkCommandBufferSubmitInfo finish();
 
     private:
         const Device& mDevice;

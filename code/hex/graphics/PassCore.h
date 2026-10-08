@@ -13,6 +13,13 @@ namespace graphics
 {
     inline constexpr uint32_t FRAMES_IN_FLIGHT = 3;
 
+    struct QueueFamilies
+    {
+        uint32_t graphics = 0;
+        uint32_t compute = 0;
+        uint32_t copy = 0;
+    };
+
     struct alignas(16) FrameConstants
     {
         float totalTime = 0.0f;
@@ -135,33 +142,35 @@ namespace graphics
 {
     class ResourceManager;
 
-    class GraphicsPass
+    class RenderPass
     {
     public:
-        virtual ~GraphicsPass() = default;
+        virtual ~RenderPass() = default;
 
         virtual void resize(const uint32_t, const uint32_t, ResourceManager&) {}
 
         virtual bool needsCopyDataToGPU() const { return false; }
-        virtual void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) = 0;
+        virtual void copyDataToGPU(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager) = 0;
         virtual void freeGPUUploadData(ResourceManager& resourceManager) = 0;
 
-        virtual void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame) = 0;
+        virtual void preRender(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame) = 0;
         virtual void render(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame) = 0;
+        virtual void postRender(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame) = 0;
     };
 
-    class ComputePass
+    class DispatchPass
     {
     public:
-        virtual ~ComputePass() = default;
+        virtual ~DispatchPass() = default;
 
         virtual void resize(const uint32_t, const uint32_t, ResourceManager&) {}
 
         virtual bool needsCopyDataToGPU() const { return false; }
-        virtual void copyDataToGPU(CommandContext& context, ResourceManager& resourceManager) = 0;
+        virtual void copyDataToGPU(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager) = 0;
         virtual void freeGPUUploadData(ResourceManager& resourceManager) = 0;
 
-        virtual void getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame) = 0;
+        virtual void preDispatch(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame) = 0;
         virtual void dispatch(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame) = 0;
+        virtual void postDispatch(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame) = 0;
     };
 }

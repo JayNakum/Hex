@@ -81,51 +81,56 @@ namespace graphics
         return pipeline;
     }
 
+    VkDescriptorSetLayout PresentPass::createSourceTables(ResourceManager& resourceManager)
+    {
+        VkDescriptorSetLayout vkDescriptorSetLayout = VK_NULL_HANDLE;
+        for (uint32_t frameIndex = 0; frameIndex < FRAMES_IN_FLIGHT; ++frameIndex)
+        {
+            const ResourceTable& sourceTable = resourceManager.createResourceTable(frameResourceID("ResourceTable_Present_RenderPass", frameIndex), buildSourceTableLayout(resourceManager));
+            vkDescriptorSetLayout = sourceTable.getDescriptorSetLayout();
+        }
+        return vkDescriptorSetLayout;
+    }
+
     PresentPass::PresentPass(const Device& device, ResourceManager& resourceManager, const VkFormat colorFormat)
         : mPassData{}
-        , mSourceTable{ {
-            ResourceTable{ device, resourceManager.descriptorAllocator(), buildSourceTableLayout(resourceManager) },
-            ResourceTable{ device, resourceManager.descriptorAllocator(), buildSourceTableLayout(resourceManager) },
-            ResourceTable{ device, resourceManager.descriptorAllocator(), buildSourceTableLayout(resourceManager) }
-        } }
-        , mShaderInput{ ShaderInput::CreateInfo{ { mSourceTable[0].getDescriptorSetLayout() }, buildPushConstantRanges() } }
+        , mShaderInput{ ShaderInput::CreateInfo{ { createSourceTables(resourceManager) }, buildPushConstantRanges() } }
         , mPipeline{ buildPipeline(device, colorFormat, mShaderInput) }
     {
         for (uint32_t frameIndex = 0; frameIndex < FRAMES_IN_FLIGHT; ++frameIndex)
         {
             resourceManager.createBuffer(
-                frameResourceID("Present_CB_PassConstants", frameIndex),
+                frameResourceID("CB_CommonPassParams_Present_RenderPass", frameIndex),
                 ResourceManager::BufferCreateInfo{ sizeof(PassConstants), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT },
                 MemoryHeap::ResourceCategory::UploadPersistentData);
 
             resourceManager.createBuffer(
-                frameResourceID("CB_BlitParams", frameIndex),
+                frameResourceID("CB_BlitParams_Present_RenderPass", frameIndex),
                 ResourceManager::BufferCreateInfo{ sizeof(BlitParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT },
                 MemoryHeap::ResourceCategory::UploadPersistentData);
         }
     }
 
-    void PresentPass::copyDataToGPU(CommandContext&, ResourceManager&)
+    void PresentPass::preRender(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame)
     {
+        const VkImage vkImageSceneColor = resourceManager.getImage(frameResourceID("UA_SceneColor_RayTracing_DispatchPass", frame.index));
+        context.transitionBarrier(vkImageSceneColor, ResourceStates::UnorderedAccess, ResourceStates::PixelShaderResource, VK_IMAGE_ASPECT_COLOR_BIT, queueFamilies.compute, queueFamilies.graphics);
     }
 
-    void PresentPass::freeGPUUploadData(ResourceManager&)
+    void PresentPass::postRender(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame)
     {
-    }
-
-    void PresentPass::getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame)
-    {
-        resourceManager.transitionImage(context, frameResourceID("UA_OutputColor", frame.index), ResourceStates::PixelShaderResource);
+        const VkImage vkImageSceneColor = resourceManager.getImage(frameResourceID("UA_SceneColor_RayTracing_DispatchPass", frame.index));
+        context.transitionBarrier(vkImageSceneColor, ResourceStates::PixelShaderResource, ResourceStates::UnorderedAccess, VK_IMAGE_ASPECT_COLOR_BIT, queueFamilies.graphics, queueFamilies.compute);
     }
 
     void PresentPass::render(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame)
     {
-        const std::string sourceName = frameResourceID("UA_OutputColor", frame.index);
-        const VkImageView vkImageViewSource = resourceManager.getImageView(sourceName, "RT_OutputColor");
+        const std::string sourceName = frameResourceID("UA_SceneColor_RayTracing_DispatchPass", frame.index);
+        const VkImageView vkImageViewSource = resourceManager.getImageView(sourceName, "SR_SceneColor");
         const VkExtent2D vkExtent2DSource = resourceManager.getExtent(sourceName);
 
-        const VkImageView vkImageViewTarget = resourceManager.getImageView("BackBuffer");
-        const VkExtent2D vkExtent2DTarget = resourceManager.getExtent("BackBuffer");
+        const VkImageView vkImageViewTarget = resourceManager.getImageView("RT_BackBuffer_Renderer");
+        const VkExtent2D vkExtent2DTarget = resourceManager.getExtent("RT_BackBuffer_Renderer");
 
         const BlitParams blitParams{
             static_cast<float>(vkExtent2DSource.width),
@@ -134,14 +139,14 @@ namespace graphics
             static_cast<float>(vkExtent2DTarget.height)
         };
 
-        const std::string passConstantsBufferName = frameResourceID("Present_CB_PassConstants", frame.index);
+        const std::string passConstantsBufferName = frameResourceID("CB_CommonPassParams_Present_RenderPass", frame.index);
         const PassConstants passConstants = mPassData.getPassConstants();
         resourceManager.writeBuffer(passConstantsBufferName, &passConstants, sizeof(passConstants));
 
-        const std::string blitParamsBufferName = frameResourceID("CB_BlitParams", frame.index);
+        const std::string blitParamsBufferName = frameResourceID("CB_BlitParams_Present_RenderPass", frame.index);
         resourceManager.writeBuffer(blitParamsBufferName, &blitParams, sizeof(blitParams));
 
-        ResourceTable& sourceTable = mSourceTable[frame.index];
+        ResourceTable& sourceTable = resourceManager.getResourceTable(frameResourceID("ResourceTable_Present_RenderPass", frame.index));
         sourceTable.setResource(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, resourceManager.getBuffer(passConstantsBufferName));
         sourceTable.setResource(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, vkImageViewSource, ResourceStates::PixelShaderResource);
         sourceTable.setResource(3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, resourceManager.getBuffer(blitParamsBufferName));

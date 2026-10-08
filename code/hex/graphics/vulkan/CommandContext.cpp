@@ -107,7 +107,29 @@ namespace graphics
         vkCmdEndRendering(mVkCommandBuffer);
     }
 
-    void CommandContext::transitionBarrier(VkImage vkImage, const ResourceState& vkResourceStateOld, const ResourceState& vkResourceStateNew, const VkImageAspectFlags vkImageAspectFlags)
+    void CommandContext::transitionBarrier(const VkBuffer& vkBuffer, const ResourceState& vkResourceStateOld, const ResourceState& vkResourceStateNew, const uint32_t srcQueueFamilyIndex, const uint32_t dstQueueFamilyIndex, const uint64_t size, const uint64_t offset)
+    {
+        VkBufferMemoryBarrier2 vkBufferMemoryBarrier2{};
+        vkBufferMemoryBarrier2.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        vkBufferMemoryBarrier2.srcStageMask = vkResourceStateOld.vkPipelineStageFlags;
+        vkBufferMemoryBarrier2.srcAccessMask = vkResourceStateOld.vkAccessFlags;
+        vkBufferMemoryBarrier2.dstStageMask = vkResourceStateNew.vkPipelineStageFlags;
+        vkBufferMemoryBarrier2.dstAccessMask = vkResourceStateNew.vkAccessFlags;
+        vkBufferMemoryBarrier2.srcQueueFamilyIndex = srcQueueFamilyIndex;
+        vkBufferMemoryBarrier2.dstQueueFamilyIndex = dstQueueFamilyIndex;
+        vkBufferMemoryBarrier2.buffer = vkBuffer;
+        vkBufferMemoryBarrier2.offset = offset;
+        vkBufferMemoryBarrier2.size = size;
+
+        VkDependencyInfo vkDependencyInfo{};
+        vkDependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        vkDependencyInfo.bufferMemoryBarrierCount = 1;
+        vkDependencyInfo.pBufferMemoryBarriers = &vkBufferMemoryBarrier2;
+
+        vkCmdPipelineBarrier2(mVkCommandBuffer, &vkDependencyInfo);
+    }
+
+    void CommandContext::transitionBarrier(const VkImage& vkImage, const ResourceState& vkResourceStateOld, const ResourceState& vkResourceStateNew, const VkImageAspectFlags vkImageAspectFlags, const uint32_t srcQueueFamilyIndex, const uint32_t dstQueueFamilyIndex)
     {
         VkImageMemoryBarrier2 vkImageMemoryBarrier2{};
         vkImageMemoryBarrier2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -117,8 +139,8 @@ namespace graphics
         vkImageMemoryBarrier2.dstAccessMask = vkResourceStateNew.vkAccessFlags;
         vkImageMemoryBarrier2.oldLayout = vkResourceStateOld.vkImageLayout;
         vkImageMemoryBarrier2.newLayout = vkResourceStateNew.vkImageLayout;
-        vkImageMemoryBarrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        vkImageMemoryBarrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        vkImageMemoryBarrier2.srcQueueFamilyIndex = srcQueueFamilyIndex;
+        vkImageMemoryBarrier2.dstQueueFamilyIndex = dstQueueFamilyIndex;
         vkImageMemoryBarrier2.image = vkImage;
         vkImageMemoryBarrier2.subresourceRange = { vkImageAspectFlags, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
 
@@ -234,9 +256,14 @@ namespace graphics
         mVkPipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     }
 
-    void CommandContext::finish()
+    VkCommandBufferSubmitInfo CommandContext::finish()
     {
         const VkResult vkResultEnd = vkEndCommandBuffer(mVkCommandBuffer);
         HEX_ASSERT(vkResultEnd == VK_SUCCESS, "Failed to end VkCommandBuffer. ", utility::translateErrorCode(vkResultEnd).c_str());
+
+        VkCommandBufferSubmitInfo vkCommandBufferSubmitInfo{};
+        vkCommandBufferSubmitInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+        vkCommandBufferSubmitInfo.commandBuffer = mVkCommandBuffer;
+        return vkCommandBufferSubmitInfo;
     }
 }

@@ -2,104 +2,19 @@
 
 #include "vulkan/Device.h"
 #include "vulkan/PhysicalDevice.h"
-#include "vulkan/CommandContext.h"
 
 namespace graphics
 {
-    namespace
-    {
-        constexpr std::array<VkDescriptorPoolSize, 4> kDescriptorPoolSizes = { {
-            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 16 },
-            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16 },
-            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16 },
-            { VK_DESCRIPTOR_TYPE_SAMPLER, 16 },
-        } };
-
-        struct Allocation
-        {
-            uint64_t rawOffset;
-            uint64_t boundOffset;
-            uint64_t size;
-        };
-
-        VkImage createVkImage(const Device& device, const uint32_t width, const uint32_t height, const VkFormat format, const VkImageUsageFlags usage)
-        {
-            VkImageCreateInfo createInfo{};
-            createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            createInfo.imageType = VK_IMAGE_TYPE_2D;
-            createInfo.format = format;
-            createInfo.extent = { width, height, 1 };
-            createInfo.mipLevels = 1;
-            createInfo.arrayLayers = 1;
-            createInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-            createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-            createInfo.usage = usage;
-            createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-            VkImage image = VK_NULL_HANDLE;
-            const VkResult vkResult = vkCreateImage(device.get(), &createInfo, nullptr, &image);
-            HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to create VkImage. ", utility::translateErrorCode(vkResult).c_str());
-
-            return image;
-        }
-
-        VkBuffer createVkBuffer(const Device& device, const uint64_t byteSize, const VkBufferUsageFlags usage)
-        {
-            VkBufferCreateInfo createInfo{};
-            createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            createInfo.size = byteSize;
-            createInfo.usage = usage;
-            createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-            VkBuffer buffer = VK_NULL_HANDLE;
-            const VkResult vkResult = vkCreateBuffer(device.get(), &createInfo, nullptr, &buffer);
-            HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to create VkBuffer. ", utility::translateErrorCode(vkResult).c_str());
-
-            return buffer;
-        }
-
-        Allocation allocateAndBindImage(const Device& device, MemoryHeap& memoryHeap, const MemoryHeap::ResourceCategory category, const VkImage image)
-        {
-            VkMemoryRequirements requirements{};
-            vkGetImageMemoryRequirements(device.get(), image, &requirements);
-
-            const uint32_t memoryTypeIndex = memoryHeap.getMemoryTypeIndex(category);
-            HEX_ASSERT((requirements.memoryTypeBits & (1u << memoryTypeIndex)) != 0,
-                "Selected memory type is incompatible with the image's requirements.");
-
-            const uint64_t rawOffset = memoryHeap.allocate(category, requirements.size + requirements.alignment);
-            const uint64_t alignedOffset = memory::alignUp<uint64_t>(rawOffset, static_cast<size_t>(requirements.alignment));
-
-            memoryHeap.bindImageMemory(category, image, alignedOffset);
-            return { rawOffset, alignedOffset, requirements.size + requirements.alignment };
-        }
-
-        Allocation allocateAndBindBuffer(const Device& device, MemoryHeap& memoryHeap, const MemoryHeap::ResourceCategory category, const VkBuffer buffer)
-        {
-            VkMemoryRequirements requirements{};
-            vkGetBufferMemoryRequirements(device.get(), buffer, &requirements);
-
-            const uint32_t memoryTypeIndex = memoryHeap.getMemoryTypeIndex(category);
-            HEX_ASSERT((requirements.memoryTypeBits & (1u << memoryTypeIndex)) != 0,
-                "Selected memory type is incompatible with the buffer's requirements.");
-
-            const uint64_t rawOffset = memoryHeap.allocate(category, requirements.size + requirements.alignment);
-            const uint64_t alignedOffset = memory::alignUp<uint64_t>(rawOffset, static_cast<size_t>(requirements.alignment));
-
-            memoryHeap.bindBufferMemory(category, buffer, alignedOffset);
-            return { rawOffset, alignedOffset, requirements.size + requirements.alignment };
-        }
-    }
-
     ResourceManager::ResourceManager(const Device& device, const PhysicalDevice& physicalDevice)
         : mDevice{ device }
         , mMemoryHeap{ device, physicalDevice }
         , mDescriptorPool{ device, DescriptorPool::CreateInfo{ kDescriptorPoolSizes.data(), kDescriptorPoolSizes.size() } }
         , mImages{}
         , mImageViews{}
+        , mExternalImages{}
         , mBuffers{}
         , mResourceTables{}
+        , mSamplers{}
     {
     }
 
@@ -126,6 +41,8 @@ namespace graphics
         }
     }
 
+    // Images
+
     const VkImage& ResourceManager::createRenderTexture(const std::string& name, const uint32_t width, const uint32_t height, const VkFormat format, const VkImageUsageFlags usage, const MemoryHeap::ResourceCategory category)
     {
         return createImageResource(name, width, height, format, usage, category, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -139,45 +56,38 @@ namespace graphics
     const VkImage& ResourceManager::recreateRenderTexture(const std::string& name, const uint32_t width, const uint32_t height)
     {
         const std::unordered_map<std::string, ImageResource>::iterator it = mImages.find(name);
-        HEX_ASSERT(it != mImages.end(), "Image resource with ID ", name, " does not exist.");
+        requireExists(it != mImages.end(), name, "Image");
 
         const MemoryHeap::ResourceCategory category = it->second.category;
         const VkFormat format = it->second.vkFormat;
         const VkImageUsageFlags usage = it->second.vkImageUsageFlags;
         const VkImageAspectFlags aspect = it->second.vkImageAspectFlags;
-        const uint64_t allocationOffset = it->second.allocationOffset;
-        const uint64_t allocationSize = it->second.allocationSize;
 
-        destroyViewsForResource(name);
-        vkDestroyImage(mDevice.get(), it->second.vkImage, nullptr);
-        mMemoryHeap.deallocate(category, allocationOffset, allocationSize);
-        mImages.erase(it);
+        releaseImage(name);
 
         return createImageResource(name, width, height, format, usage, category, aspect);
     }
 
-    VkBuffer& ResourceManager::createBuffer(const std::string& name, const BufferCreateInfo& createInfo, const MemoryHeap::ResourceCategory category)
+    void ResourceManager::releaseImage(const std::string& name)
     {
-        const VkBuffer vkBuffer = createVkBuffer(mDevice, createInfo.byteSize, createInfo.usage);
-        const Allocation allocation = allocateAndBindBuffer(mDevice, mMemoryHeap, category, vkBuffer);
+        const std::unordered_map<std::string, ImageResource>::iterator it = mImages.find(name);
+        requireExists(it != mImages.end(), name, "Image");
 
-        const std::pair<std::unordered_map<std::string, BufferResource>::iterator, bool> insertResult = mBuffers.try_emplace(name, BufferResource{ vkBuffer, category, allocation.rawOffset, allocation.size });
-        HEX_ASSERT(insertResult.second, "Buffer resource with ID ", name, " already exists.");
-
-        return insertResult.first->second.vkBuffer;
+        destroyViewsForResource(name);
+        vkDestroyImage(mDevice.get(), it->second.vkImage, nullptr);
+        mMemoryHeap.deallocate(it->second.category, it->second.allocationOffset, it->second.allocationSize);
+        mImages.erase(it);
     }
 
     VkImage& ResourceManager::getImage(const std::string& name)
     {
-        const std::unordered_map<std::string, ImageResource>::iterator it = mImages.find(name);
-        HEX_ASSERT(it != mImages.end(), "Image resource with ID ", name, " does not exist.");
-        return it->second.vkImage;
+        return const_cast<VkImage&>(static_cast<const ResourceManager&>(*this).getImage(name));
     }
 
     const VkImage& ResourceManager::getImage(const std::string& name) const
     {
         const std::unordered_map<std::string, ImageResource>::const_iterator it = mImages.find(name);
-        HEX_ASSERT(it != mImages.end(), "Image resource with ID ", name, " does not exist.");
+        requireExists(it != mImages.end(), name, "Image");
         return it->second.vkImage;
     }
 
@@ -189,50 +99,15 @@ namespace graphics
             return it->second.vkExtent2D;
         }
 
-        const std::unordered_map<std::string, VkExtent2D>::const_iterator registeredIt = mRegisteredExtents.find(name);
-        HEX_ASSERT(registeredIt != mRegisteredExtents.end(), "Image resource with ID ", name, " does not exist.");
-        return registeredIt->second;
-    }
-
-    VkBuffer& ResourceManager::getBuffer(const std::string& name)
-    {
-        const std::unordered_map<std::string, BufferResource>::iterator it = mBuffers.find(name);
-        HEX_ASSERT(it != mBuffers.end(), "Buffer resource with ID ", name, " does not exist.");
-        return it->second.vkBuffer;
-    }
-
-    const VkBuffer& ResourceManager::getBuffer(const std::string& name) const
-    {
-        const std::unordered_map<std::string, BufferResource>::const_iterator it = mBuffers.find(name);
-        HEX_ASSERT(it != mBuffers.end(), "Buffer resource with ID ", name, " does not exist.");
-        return it->second.vkBuffer;
-    }
-
-    void ResourceManager::writeBuffer(const std::string& name, const void* data, const uint64_t size, const uint64_t offset) const
-    {
-        const std::unordered_map<std::string, BufferResource>::const_iterator it = mBuffers.find(name);
-        HEX_ASSERT(it != mBuffers.end(), "Buffer resource with ID ", name, " does not exist.");
-
-        const BufferResource& bufferResource = it->second;
-        void* mapped = mMemoryHeap.map(bufferResource.category, size, bufferResource.allocationOffset + offset);
-        std::memcpy(mapped, data, size);
-        mMemoryHeap.unmap(bufferResource.category);
-    }
-
-    void ResourceManager::transitionImage(CommandContext& context, const std::string& name, const ResourceState& newState)
-    {
-        const std::unordered_map<std::string, ImageResource>::iterator it = mImages.find(name);
-        HEX_ASSERT(it != mImages.end(), "Image resource with ID ", name, " does not exist.");
-
-        ImageResource& imageResource = it->second;
-        context.transitionBarrier(imageResource.vkImage, imageResource.currentState, newState, imageResource.vkImageAspectFlags);
-        imageResource.currentState = newState;
+        const std::unordered_map<std::string, ExternalImage>::const_iterator externalIt = mExternalImages.find(name);
+        requireExists(externalIt != mExternalImages.end(), name, "Image");
+        return externalIt->second.vkExtent2D;
     }
 
     VkImageView ResourceManager::createImageView(const std::string& name, const ImageViewCreateInfo& viewInfo, const std::string& alias)
     {
         const std::unordered_map<std::string, ImageResource>::iterator it = mImages.find(name);
-        HEX_ASSERT(it != mImages.end(), "Image resource with ID ", name, " does not exist.");
+        requireExists(it != mImages.end(), name, "Image");
 
         const std::string key = buildImageViewKey(name, alias);
         const std::pair<std::unordered_map<std::string, VkImageView>::iterator, bool> insertResult = mImageViews.try_emplace(key, VK_NULL_HANDLE);
@@ -251,26 +126,73 @@ namespace graphics
             return viewIt->second;
         }
 
-        const std::unordered_map<std::string, VkImageView>::const_iterator registeredIt = mRegisteredImageViews.find(name);
-        HEX_ASSERT(registeredIt != mRegisteredImageViews.end(), "Image view with alias ", alias, " does not exist for image resource ", name, ".");
-        return registeredIt->second;
-    }
-
-    void ResourceManager::registerImageView(const std::string& name, VkImageView vkImageView, const VkExtent2D& vkExtent2D)
-    {
-        mRegisteredImageViews[name] = vkImageView;
-        mRegisteredExtents[name] = vkExtent2D;
+        const std::unordered_map<std::string, ExternalImage>::const_iterator externalIt = mExternalImages.find(name);
+        requireExists(externalIt != mExternalImages.end(), name, "Image view");
+        return externalIt->second.vkImageView;
     }
 
     void ResourceManager::destroyImageView(const std::string& name, const std::string& alias)
     {
         const std::string key = buildImageViewKey(name, alias);
         const std::unordered_map<std::string, VkImageView>::iterator it = mImageViews.find(key);
-        HEX_ASSERT(it != mImageViews.end(), "Image view with alias ", alias, " does not exist for image resource ", name, ".");
+        requireExists(it != mImageViews.end(), name, "Image view");
 
         vkDestroyImageView(mDevice.get(), it->second, nullptr);
         mImageViews.erase(it);
     }
+
+    void ResourceManager::registerImageView(const std::string& name, VkImageView vkImageView, const VkExtent2D& vkExtent2D)
+    {
+        mExternalImages[name] = ExternalImage{ vkImageView, vkExtent2D };
+    }
+
+    // Buffers
+
+    VkBuffer& ResourceManager::createBuffer(const std::string& name, const BufferCreateInfo& createInfo, const MemoryHeap::ResourceCategory category)
+    {
+        const VkBuffer vkBuffer = createVkBuffer(mDevice, createInfo.byteSize, createInfo.usage);
+        const Allocation allocation = allocateAndBindBuffer(mDevice, mMemoryHeap, category, vkBuffer);
+
+        const std::pair<std::unordered_map<std::string, BufferResource>::iterator, bool> insertResult = mBuffers.try_emplace(name, BufferResource{ vkBuffer, category, allocation.rawOffset, allocation.size });
+        HEX_ASSERT(insertResult.second, "Buffer resource with ID ", name, " already exists.");
+
+        return insertResult.first->second.vkBuffer;
+    }
+
+    void ResourceManager::releaseBuffer(const std::string& name)
+    {
+        const std::unordered_map<std::string, BufferResource>::iterator it = mBuffers.find(name);
+        requireExists(it != mBuffers.end(), name, "Buffer");
+
+        vkDestroyBuffer(mDevice.get(), it->second.vkBuffer, nullptr);
+        mMemoryHeap.deallocate(it->second.category, it->second.allocationOffset, it->second.allocationSize);
+        mBuffers.erase(it);
+    }
+
+    VkBuffer& ResourceManager::getBuffer(const std::string& name)
+    {
+        return const_cast<VkBuffer&>(static_cast<const ResourceManager&>(*this).getBuffer(name));
+    }
+
+    const VkBuffer& ResourceManager::getBuffer(const std::string& name) const
+    {
+        const std::unordered_map<std::string, BufferResource>::const_iterator it = mBuffers.find(name);
+        requireExists(it != mBuffers.end(), name, "Buffer");
+        return it->second.vkBuffer;
+    }
+
+    void ResourceManager::writeBuffer(const std::string& name, const void* data, const uint64_t size, const uint64_t offset) const
+    {
+        const std::unordered_map<std::string, BufferResource>::const_iterator it = mBuffers.find(name);
+        requireExists(it != mBuffers.end(), name, "Buffer");
+
+        const BufferResource& bufferResource = it->second;
+        void* mapped = mMemoryHeap.map(bufferResource.category, size, bufferResource.allocationOffset + offset);
+        std::memcpy(mapped, data, size);
+        mMemoryHeap.unmap(bufferResource.category);
+    }
+
+    // Resource tables
 
     ResourceTable& ResourceManager::createResourceTable(const std::string& name, const ResourceTable::Layout& layout)
     {
@@ -280,12 +202,14 @@ namespace graphics
         return insertResult.first->second;
     }
 
-    ResourceTable& ResourceManager::getResourceTable(const std::string& name)
+    ResourceTable& ResourceManager::getResourceTable(const std::string& name) const
     {
         const std::unordered_map<std::string, ResourceTable>::iterator it = mResourceTables.find(name);
-        HEX_ASSERT(it != mResourceTables.end(), "ResourceTable resource with ID ", name, " does not exist.");
+        requireExists(it != mResourceTables.end(), name, "ResourceTable");
         return it->second;
     }
+
+    // Samplers
 
     VkSampler ResourceManager::createSampler(const std::string& name, const SamplerCreateInfo& createInfo)
     {
@@ -320,9 +244,11 @@ namespace graphics
     VkSampler ResourceManager::getSampler(const std::string& name) const
     {
         const std::unordered_map<std::string, VkSampler>::const_iterator it = mSamplers.find(name);
-        HEX_ASSERT(it != mSamplers.end(), "Sampler resource with ID ", name, " does not exist.");
+        requireExists(it != mSamplers.end(), name, "Sampler");
         return it->second;
     }
+
+    // Private helpers
 
     const VkImage& ResourceManager::createImageResource(const std::string& name, const uint32_t width, const uint32_t height, const VkFormat format, const VkImageUsageFlags usage, const MemoryHeap::ResourceCategory category, const VkImageAspectFlags aspect)
     {
@@ -330,7 +256,7 @@ namespace graphics
         const Allocation allocation = allocateAndBindImage(mDevice, mMemoryHeap, category, vkImage);
         const VkExtent2D vkExtent2D{ width, height };
 
-        const std::pair<std::unordered_map<std::string, ImageResource>::iterator, bool> insertResult = mImages.try_emplace(name, ImageResource{ vkImage, format, vkExtent2D, usage, aspect, ResourceStates::Undefined, category, allocation.rawOffset, allocation.size });
+        const std::pair<std::unordered_map<std::string, ImageResource>::iterator, bool> insertResult = mImages.try_emplace(name, ImageResource{ vkImage, format, vkExtent2D, usage, aspect, category, allocation.rawOffset, allocation.size });
         HEX_ASSERT(insertResult.second, "Image resource with ID ", name, " already exists.");
 
         return insertResult.first->second.vkImage;
@@ -377,5 +303,81 @@ namespace graphics
                 ++it;
             }
         }
+    }
+
+    VkImage ResourceManager::createVkImage(const Device& device, const uint32_t width, const uint32_t height, const VkFormat format, const VkImageUsageFlags usage)
+    {
+        VkImageCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        createInfo.imageType = VK_IMAGE_TYPE_2D;
+        createInfo.format = format;
+        createInfo.extent = { width, height, 1 };
+        createInfo.mipLevels = 1;
+        createInfo.arrayLayers = 1;
+        createInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        createInfo.usage = usage;
+        createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VkImage image = VK_NULL_HANDLE;
+        const VkResult vkResult = vkCreateImage(device.get(), &createInfo, nullptr, &image);
+        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to create VkImage. ", utility::translateErrorCode(vkResult).c_str());
+
+        return image;
+    }
+
+    VkBuffer ResourceManager::createVkBuffer(const Device& device, const uint64_t byteSize, const VkBufferUsageFlags usage)
+    {
+        VkBufferCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        createInfo.size = byteSize;
+        createInfo.usage = usage;
+        createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VkBuffer buffer = VK_NULL_HANDLE;
+        const VkResult vkResult = vkCreateBuffer(device.get(), &createInfo, nullptr, &buffer);
+        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to create VkBuffer. ", utility::translateErrorCode(vkResult).c_str());
+
+        return buffer;
+    }
+
+    ResourceManager::Allocation ResourceManager::allocateAndBindImage(const Device& device, MemoryHeap& memoryHeap, const MemoryHeap::ResourceCategory category, const VkImage image)
+    {
+        VkMemoryRequirements requirements{};
+        vkGetImageMemoryRequirements(device.get(), image, &requirements);
+
+        const uint32_t memoryTypeIndex = memoryHeap.getMemoryTypeIndex(category);
+        HEX_ASSERT((requirements.memoryTypeBits & (1u << memoryTypeIndex)) != 0,
+            "Selected memory type is incompatible with the image's requirements.");
+
+        const uint64_t rawOffset = memoryHeap.allocate(category, requirements.size + requirements.alignment);
+        const uint64_t alignedOffset = memory::alignUp<uint64_t>(rawOffset, static_cast<size_t>(requirements.alignment));
+
+        memoryHeap.bindImageMemory(category, image, alignedOffset);
+        return { rawOffset, alignedOffset, requirements.size + requirements.alignment };
+    }
+
+    ResourceManager::Allocation ResourceManager::allocateAndBindBuffer(const Device& device, MemoryHeap& memoryHeap, const MemoryHeap::ResourceCategory category, const VkBuffer buffer)
+    {
+        VkMemoryRequirements requirements{};
+        vkGetBufferMemoryRequirements(device.get(), buffer, &requirements);
+
+        const uint32_t memoryTypeIndex = memoryHeap.getMemoryTypeIndex(category);
+        HEX_ASSERT((requirements.memoryTypeBits & (1u << memoryTypeIndex)) != 0,
+            "Selected memory type is incompatible with the buffer's requirements.");
+
+        const uint64_t allocationSize = memory::alignUp<uint64_t>(requirements.size + requirements.alignment, uint64_t{ 256 });
+
+        const uint64_t rawOffset = memoryHeap.allocate(category, allocationSize);
+        const uint64_t alignedOffset = memory::alignUp<uint64_t>(rawOffset, static_cast<size_t>(requirements.alignment));
+
+        memoryHeap.bindBufferMemory(category, buffer, alignedOffset);
+        return { rawOffset, alignedOffset, allocationSize };
+    }
+
+    void ResourceManager::requireExists(const bool exists, const std::string& name, const char* kind)
+    {
+        HEX_ASSERT(exists, kind, " resource with ID ", name, " does not exist.");
     }
 }

@@ -5,6 +5,7 @@ target_dir = "%{wks.location}/../bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.archite
 
 code_path = "%{wks.location}/../../code"
 vendors_path = "%{wks.location}/../../vendors"
+assets_path = path.getabsolute(path.join(_SCRIPT_DIR, "../assets"))
 
 -- CORE --
 prj_src = {}
@@ -22,4 +23,4 @@ dependencies["imgui"] = "%{vendors_path}/imgui/imgui-1.92.9b-docking"
 
 -- SHADER TOOLCHAIN --
 slangc_bin = "%{dependencies.slang}/bin/slangc.exe"
-shader_out_dir = "%{target_dir}/Shaders"
+shader_out_dir = "%{target_dir}/shaders"

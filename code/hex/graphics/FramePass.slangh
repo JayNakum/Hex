@@ -2,10 +2,9 @@ struct FrameConstants
 {
     float totalTime;
     float deltaTime;
-    uint32_t width;
-    uint32_t height;
-    uint32_t index;
-    uint32_t padding[3];
+    uint2 size;
+    uint index;
+    const uint padding[3];
 };
 
 struct PassConstants
@@ -14,15 +13,15 @@ struct PassConstants
     float4x4 invView;
 
     float3 eyePosition;
-    uint32_t _passPadding0;
+    const uint _passPadding0;
 
     float4x4 projection;
     float4x4 invProjection;
 
     float nearZ;
     float farZ;
-    uint32_t _passPadding1;
-    uint32_t _passPadding2;
+    const uint _passPadding1;
+    const uint _passPadding2;
 
     float4x4 viewProjection;
     float4x4 invViewProjection;
@@ -30,5 +29,5 @@ struct PassConstants
     float2 renderTargetSize;
     float2 invRenderTargetSize;
 
-    uint32_t _passPadding[5];
+    const uint _passPadding[5];
 };

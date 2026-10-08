@@ -5,13 +5,11 @@
 #include "vulkan/MemoryHeap.h"
 #include "vulkan/DescriptorPool.h"
 #include "vulkan/ResourceTable.h"
-#include "vulkan/resourceState.h"
 
 namespace graphics
 {
     class Device;
     class PhysicalDevice;
-    class CommandContext;
 }
 
 namespace graphics
@@ -55,20 +53,15 @@ namespace graphics
         ResourceManager(ResourceManager&&) = delete;
         ResourceManager& operator=(ResourceManager&&) = delete;
 
+        // Images
         const VkImage& createRenderTexture(const std::string& name, const uint32_t width, const uint32_t height, const VkFormat format, const VkImageUsageFlags usage, const MemoryHeap::ResourceCategory category);
         const VkImage& createDepthTexture(const std::string& name, const uint32_t width, const uint32_t height, const VkFormat format = VK_FORMAT_D32_SFLOAT, const MemoryHeap::ResourceCategory category = MemoryHeap::ResourceCategory::RenderTargetData);
         const VkImage& recreateRenderTexture(const std::string& name, const uint32_t width, const uint32_t height);
-
-        VkBuffer& createBuffer(const std::string& name, const BufferCreateInfo& createInfo, const MemoryHeap::ResourceCategory category);
+        void releaseImage(const std::string& name);
 
         VkImage& getImage(const std::string& name);
         const VkImage& getImage(const std::string& name) const;
         VkExtent2D getExtent(const std::string& name) const;
-        VkBuffer& getBuffer(const std::string& name);
-        const VkBuffer& getBuffer(const std::string& name) const;
-        void writeBuffer(const std::string& name, const void* data, const uint64_t size, const uint64_t offset = 0) const;
-
-        void transitionImage(CommandContext& context, const std::string& name, const ResourceState& newState);
 
         VkImageView createImageView(const std::string& name, const ImageViewCreateInfo& viewInfo, const std::string& alias);
         VkImageView getImageView(const std::string& name, const std::string& alias = "") const;
@@ -76,9 +69,19 @@ namespace graphics
 
         void registerImageView(const std::string& name, VkImageView vkImageView, const VkExtent2D& vkExtent2D);
 
-        ResourceTable& createResourceTable(const std::string& name, const ResourceTable::Layout& layout);
-        ResourceTable& getResourceTable(const std::string& name);
+        // Buffers
+        VkBuffer& createBuffer(const std::string& name, const BufferCreateInfo& createInfo, const MemoryHeap::ResourceCategory category);
+        void releaseBuffer(const std::string& name);
 
+        VkBuffer& getBuffer(const std::string& name);
+        const VkBuffer& getBuffer(const std::string& name) const;
+        void writeBuffer(const std::string& name, const void* data, const uint64_t size, const uint64_t offset = 0) const;
+
+        // Resource tables
+        ResourceTable& createResourceTable(const std::string& name, const ResourceTable::Layout& layout);
+        ResourceTable& getResourceTable(const std::string& name) const;
+
+        // Samplers
         VkSampler createSampler(const std::string& name, const SamplerCreateInfo& createInfo);
         VkSampler getSampler(const std::string& name) const;
 
@@ -93,7 +96,6 @@ namespace graphics
             VkExtent2D vkExtent2D;
             VkImageUsageFlags vkImageUsageFlags;
             VkImageAspectFlags vkImageAspectFlags;
-            ResourceState currentState;
             MemoryHeap::ResourceCategory category;
             uint64_t allocationOffset;
             uint64_t allocationSize;
@@ -107,10 +109,37 @@ namespace graphics
             uint64_t allocationSize;
         };
 
+        struct ExternalImage
+        {
+            VkImageView vkImageView;
+            VkExtent2D vkExtent2D;
+        };
+
+        struct Allocation
+        {
+            uint64_t rawOffset;
+            uint64_t boundOffset;
+            uint64_t size;
+        };
+
+        static constexpr std::array<VkDescriptorPoolSize, 4> kDescriptorPoolSizes = { {
+            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 16 },
+            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16 },
+            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16 },
+            { VK_DESCRIPTOR_TYPE_SAMPLER, 16 },
+        } };
+
         const VkImage& createImageResource(const std::string& name, const uint32_t width, const uint32_t height, const VkFormat format, const VkImageUsageFlags usage, const MemoryHeap::ResourceCategory category, const VkImageAspectFlags aspect);
         static VkImageView buildImageView(const Device& device, const ImageResource& imageResource, const ImageViewCreateInfo& viewInfo);
         static std::string buildImageViewKey(const std::string& name, const std::string& alias);
         void destroyViewsForResource(const std::string& name);
+
+        static VkImage createVkImage(const Device& device, const uint32_t width, const uint32_t height, const VkFormat format, const VkImageUsageFlags usage);
+        static VkBuffer createVkBuffer(const Device& device, const uint64_t byteSize, const VkBufferUsageFlags usage);
+        static Allocation allocateAndBindImage(const Device& device, MemoryHeap& memoryHeap, const MemoryHeap::ResourceCategory category, const VkImage image);
+        static Allocation allocateAndBindBuffer(const Device& device, MemoryHeap& memoryHeap, const MemoryHeap::ResourceCategory category, const VkBuffer buffer);
+
+        static void requireExists(const bool exists, const std::string& name, const char* kind);
 
     private:
         const Device& mDevice;
@@ -120,10 +149,9 @@ namespace graphics
 
         std::unordered_map<std::string, ImageResource> mImages;
         std::unordered_map<std::string, VkImageView> mImageViews;
+        std::unordered_map<std::string, ExternalImage> mExternalImages;
         std::unordered_map<std::string, BufferResource> mBuffers;
-        std::unordered_map<std::string, ResourceTable> mResourceTables;
+        mutable std::unordered_map<std::string, ResourceTable> mResourceTables;
         std::unordered_map<std::string, VkSampler> mSamplers;
-        std::unordered_map<std::string, VkImageView> mRegisteredImageViews;
-        std::unordered_map<std::string, VkExtent2D> mRegisteredExtents;
     };
 }

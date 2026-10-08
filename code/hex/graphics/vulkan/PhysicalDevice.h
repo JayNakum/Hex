@@ -27,10 +27,7 @@ namespace graphics
 
         inline const VkPhysicalDevice& get() const { return mVkPhysicalDevice; }
         const std::vector<VkQueueFamilyProperties> getAllQueueFamilyProperties() const;
-        uint32_t getQueueFamilyIndex(const VkQueueFlags& flags) const;
-
-        uint32_t getGraphicsQueueFamilyIndex() const;
-        uint32_t getQueueCount(const uint32_t familyIndex) const;
+        uint32_t getQueueFamilyIndex(const VkQueueFlags include, const VkQueueFlags exclude = 0) const;
 
         bool checkSurfaceSupport(const uint32_t queueFamilyIndex, VkSurfaceKHR surface) const;
         const SurfaceSupportDetails querySurfaceSupportDetails(VkSurfaceKHR surface) const;

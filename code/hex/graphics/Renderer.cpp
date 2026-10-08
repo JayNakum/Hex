@@ -27,30 +27,60 @@ namespace graphics
             return vkQueue;
         }
 
-        uint32_t computeGraphicsFamilyIndex(const PhysicalDevice& physicalDevice, VkSurfaceKHR vkSurfaceKHR)
+        QueueFamilies computeQueueFamilies(const PhysicalDevice& physicalDevice, VkSurfaceKHR vkSurfaceKHR)
         {
-            const uint32_t familyIndex = physicalDevice.getGraphicsQueueFamilyIndex();
-            HEX_ASSERT(physicalDevice.checkSurfaceSupport(familyIndex, vkSurfaceKHR), "Graphics queue family does not support presentation to the given surface.");
+            QueueFamilies queueFamilies{};
 
-            return familyIndex;
+            queueFamilies.graphics = physicalDevice.getQueueFamilyIndex(VK_QUEUE_GRAPHICS_BIT);
+            HEX_ASSERT(physicalDevice.checkSurfaceSupport(queueFamilies.graphics, vkSurfaceKHR), "Graphics queue family does not support presentation to the given surface.");
+
+            queueFamilies.compute = physicalDevice.getQueueFamilyIndex(VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
+            if (queueFamilies.compute == UINT32_MAX)
+            {
+                queueFamilies.compute = physicalDevice.getQueueFamilyIndex(VK_QUEUE_COMPUTE_BIT);
+            }
+
+            queueFamilies.copy = physicalDevice.getQueueFamilyIndex(VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
+            if (queueFamilies.copy == UINT32_MAX)
+            {
+                queueFamilies.copy = physicalDevice.getQueueFamilyIndex(VK_QUEUE_TRANSFER_BIT);
+            }
+
+            return queueFamilies;
         }
 
-        uint32_t computeQueueCount(const PhysicalDevice& physicalDevice, const uint32_t familyIndex)
+        void submitBatch(VkQueue vkQueue, const std::vector<VkCommandBufferSubmitInfo>& commandBufferSubmitInfos, const std::vector<VkSemaphoreSubmitInfo>& waitSemaphoreSubmitInfos, const std::vector<VkSemaphoreSubmitInfo>& signalSemaphoreSubmitInfos, VkFence vkFence)
         {
-            return std::min<uint32_t>(physicalDevice.getQueueCount(familyIndex), 3);
+            VkSubmitInfo2 vkSubmitInfo2{};
+            vkSubmitInfo2.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+            vkSubmitInfo2.waitSemaphoreInfoCount = static_cast<uint32_t>(waitSemaphoreSubmitInfos.size());
+            vkSubmitInfo2.pWaitSemaphoreInfos = waitSemaphoreSubmitInfos.data();
+            vkSubmitInfo2.commandBufferInfoCount = static_cast<uint32_t>(commandBufferSubmitInfos.size());
+            vkSubmitInfo2.pCommandBufferInfos = commandBufferSubmitInfos.data();
+            vkSubmitInfo2.signalSemaphoreInfoCount = static_cast<uint32_t>(signalSemaphoreSubmitInfos.size());
+            vkSubmitInfo2.pSignalSemaphoreInfos = signalSemaphoreSubmitInfos.data();
+
+            const VkResult vkResult = vkQueueSubmit2(vkQueue, 1, &vkSubmitInfo2, vkFence);
+            HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to submit to VkQueue. ", utility::translateErrorCode(vkResult).c_str());
         }
     }
 
-    Device Renderer::createDevice(const Instance& instance, const PhysicalDevice& physicalDevice, const uint32_t graphicsFamilyIndex, const uint32_t queueCount)
+    Device Renderer::createDevice(const Instance& instance, const PhysicalDevice& physicalDevice, const QueueFamilies& queueFamilies)
     {
-        std::vector<float> queuePriorities(queueCount, 1.0f);
+        const std::set<uint32_t> distinctFamilies{ queueFamilies.graphics, queueFamilies.compute, queueFamilies.copy };
 
-        Device::DeviceQueueCreateInfo deviceQueueCreateInfo{};
-        deviceQueueCreateInfo.familyIndex = graphicsFamilyIndex;
-        deviceQueueCreateInfo.count = queueCount;
-        deviceQueueCreateInfo.priorities = queuePriorities.data();
+        float queuePriority = 1.0f;
+        std::vector<Device::DeviceQueueCreateInfo> deviceQueueCreateInfos;
+        for (const uint32_t familyIndex : distinctFamilies)
+        {
+            Device::DeviceQueueCreateInfo deviceQueueCreateInfo{};
+            deviceQueueCreateInfo.familyIndex = familyIndex;
+            deviceQueueCreateInfo.count = 1;
+            deviceQueueCreateInfo.priorities = &queuePriority;
+            deviceQueueCreateInfos.push_back(deviceQueueCreateInfo);
+        }
 
-        const Device::CreateInfo deviceCreateInfo{ physicalDevice, 1, &deviceQueueCreateInfo };
+        const Device::CreateInfo deviceCreateInfo{ physicalDevice, deviceQueueCreateInfos.size(), deviceQueueCreateInfos.data() };
 
         return Device{ instance, deviceCreateInfo };
     }
@@ -60,38 +90,42 @@ namespace graphics
         , mInstance{ Instance::CreateInfo{} }
         , mSurface{ mInstance, mWindow.get() }
         , mPhysicalDevice{ mInstance }
-        , mGraphicsFamilyIndex{ computeGraphicsFamilyIndex(mPhysicalDevice, mSurface.get()) }
-        , mQueueCount{ computeQueueCount(mPhysicalDevice, mGraphicsFamilyIndex) }
-        , mDevice{ createDevice(mInstance, mPhysicalDevice, mGraphicsFamilyIndex, mQueueCount) }
+        , mQueueFamilies{ computeQueueFamilies(mPhysicalDevice, mSurface.get()) }
+        , mDevice{ createDevice(mInstance, mPhysicalDevice, mQueueFamilies) }
         , mResourceManager{ mDevice, mPhysicalDevice }
-        , mVkQueueGraphics{ getDeviceQueue(mDevice, mGraphicsFamilyIndex, 0) }
-        , mVkQueueCompute{ getDeviceQueue(mDevice, mGraphicsFamilyIndex, std::min<uint32_t>(1, mQueueCount - 1)) }
-        , mVkQueueCopy{ getDeviceQueue(mDevice, mGraphicsFamilyIndex, std::min<uint32_t>(2, mQueueCount - 1)) }
+        , mVkQueueGraphics{ getDeviceQueue(mDevice, mQueueFamilies.graphics, QUEUE_INDEX) }
+        , mVkQueueCompute{ getDeviceQueue(mDevice, mQueueFamilies.compute, QUEUE_INDEX) }
+        , mVkQueueCopy{ getDeviceQueue(mDevice, mQueueFamilies.copy, QUEUE_INDEX) }
         , mSwapchain{ std::in_place, mDevice, Swapchain::CreateInfo{
             mPhysicalDevice,
             mSurface.get(),
-            std::unordered_set<uint32_t>{ mGraphicsFamilyIndex },
+            std::unordered_set<uint32_t>{ mQueueFamilies.graphics },
             mWindow.getDescription().width,
             mWindow.getDescription().height } }
-        , mGraphicsContextPool{ mDevice, CommandContext::CreateInfo{ mGraphicsFamilyIndex } }
-        , mComputeContextPool{ mDevice, CommandContext::CreateInfo{ mGraphicsFamilyIndex } }
+        , mGraphicsContextPool{ mDevice, CommandContext::CreateInfo{ mQueueFamilies.graphics } }
+        , mComputeContextPool{ mDevice, CommandContext::CreateInfo{ mQueueFamilies.compute } }
+        , mCopyContextPool{ mDevice, CommandContext::CreateInfo{ mQueueFamilies.copy } }
         , mRayTracingPass{ mDevice, mResourceManager }
         , mPresentPass{ mDevice, mResourceManager, mSwapchain->getFormat() }
-        , mImGuiPass{ mInstance, mPhysicalDevice, mDevice, mVkQueueGraphics, mGraphicsFamilyIndex, mSwapchain->getFormat(), static_cast<uint32_t>(mSwapchain->getImageCount()), mWindow.get() }
+        , mImGuiPass{ mInstance, mPhysicalDevice, mDevice, mVkQueueGraphics, mQueueFamilies.graphics, mSwapchain->getFormat(), static_cast<uint32_t>(mSwapchain->getImageCount()), mWindow.get() }
         , mVkSemaphoresComputeFinished{}
         , mVkSemaphoresGraphicsReadDone{}
+        , mVkSemaphoresCopyFinished{}
         , mHasGraphicsReadPending{}
+        , mHasCopyPending{}
         , mVkFencesGraphics{}
         , mVkFencesCompute{}
+        , mVkFencesCopy{}
         , mVkFencesImagesInFlight{ mSwapchain->getImageCount(), VK_NULL_HANDLE }
         , mCurrentFrame{ 0 }
     {
-        mResourceManager.registerImageView("BackBuffer", VK_NULL_HANDLE, mSwapchain->getExtent());
+        mResourceManager.registerImageView("RT_BackBuffer_Renderer", VK_NULL_HANDLE, mSwapchain->getExtent());
 
         for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
         {
             mVkSemaphoresComputeFinished[i] = createSemaphore(mDevice);
             mVkSemaphoresGraphicsReadDone[i] = createSemaphore(mDevice);
+            mVkSemaphoresCopyFinished[i] = createSemaphore(mDevice);
         }
     }
 
@@ -99,10 +133,13 @@ namespace graphics
     {
         mDevice.waitIdle();
 
+        mRayTracingPass.freeGPUUploadData(mResourceManager);
+
         ShaderInput::clearPipelineLayoutCache();
 
         for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
         {
+            vkDestroySemaphore(mDevice.get(), mVkSemaphoresCopyFinished[i], nullptr);
             vkDestroySemaphore(mDevice.get(), mVkSemaphoresGraphicsReadDone[i], nullptr);
             vkDestroySemaphore(mDevice.get(), mVkSemaphoresComputeFinished[i], nullptr);
         }
@@ -118,121 +155,59 @@ namespace graphics
     {
         frame.index = mCurrentFrame % FRAMES_IN_FLIGHT;
 
-        if (mVkFencesGraphics[frame.index] != VK_NULL_HANDLE)
-        {
-            const VkResult vkResultGraphicsWait = vkWaitForFences(mDevice.get(), 1, &mVkFencesGraphics[frame.index], VK_TRUE, UINT64_MAX);
-            HEX_ASSERT(vkResultGraphicsWait == VK_SUCCESS, "Failed to wait for graphics VkFence. ", utility::translateErrorCode(vkResultGraphicsWait).c_str());
-        }
+        waitForFence(mVkFencesGraphics[frame.index]);
 
         Swapchain::BackBuffer backBuffer;
-        if (!mSwapchain->acquireNextBackBuffer(backBuffer))
+        if (!acquireBackBuffer(backBuffer))
         {
-            const platform::Window::Description& description = mWindow.getDescription();
-            resize(description.width, description.height);
             return;
         }
-        const VkImage vkImageBackBuffer = backBuffer.image;
-        mResourceManager.registerImageView("BackBuffer", backBuffer.view, backBuffer.extent);
 
-        VkFence& vkFenceImageInFlight = mVkFencesImagesInFlight[backBuffer.imageIndex];
-        if (vkFenceImageInFlight != VK_NULL_HANDLE)
+        waitForFence(mVkFencesImagesInFlight[backBuffer.imageIndex]);
+        waitForFence(mVkFencesCompute[frame.index]);
+        waitForFence(mVkFencesCopy[frame.index]);
+
+        if (mRayTracingPass.needsCopyDataToGPU())
         {
-            const VkResult vkResultImageWait = vkWaitForFences(mDevice.get(), 1, &vkFenceImageInFlight, VK_TRUE, UINT64_MAX);
-            HEX_ASSERT(vkResultImageWait == VK_SUCCESS, "Failed to wait for image-in-flight VkFence. ", utility::translateErrorCode(vkResultImageWait).c_str());
+            CommandContext& copyContext = mCopyContextPool.requestContext();
+            mVkFencesCopy[frame.index] = copyContext.getFence();
+            copyContext.reset();
+
+            mRayTracingPass.copyDataToGPU(copyContext, mQueueFamilies, mResourceManager);
+
+            submitCopy(frame, { copyContext.finish() });
         }
 
-        if (mVkFencesCompute[frame.index] != VK_NULL_HANDLE)
-        {
-            const VkResult vkResultComputeWait = vkWaitForFences(mDevice.get(), 1, &mVkFencesCompute[frame.index], VK_TRUE, UINT64_MAX);
-            HEX_ASSERT(vkResultComputeWait == VK_SUCCESS, "Failed to wait for compute VkFence. ", utility::translateErrorCode(vkResultComputeWait).c_str());
-        }
+        CommandContext& rayTracingPassComputeContext = mComputeContextPool.requestContext();
+        mVkFencesCompute[frame.index] = rayTracingPassComputeContext.getFence();
+        rayTracingPassComputeContext.reset();
 
-        CommandContext& computeContext = mComputeContextPool.requestContext();
-        mVkFencesCompute[frame.index] = computeContext.getFence();
-        computeContext.reset();
+        mRayTracingPass.preDispatch(rayTracingPassComputeContext, mQueueFamilies, mResourceManager, frame);
+        mRayTracingPass.dispatch(rayTracingPassComputeContext, mResourceManager, frame);
+        mRayTracingPass.postDispatch(rayTracingPassComputeContext, mQueueFamilies, mResourceManager, frame);
 
-        mRayTracingPass.getInputOutputs(computeContext, mResourceManager, frame);
-        mRayTracingPass.dispatch(computeContext, mResourceManager, frame);
+        submitCompute(frame, { rayTracingPassComputeContext.finish() });
 
-        computeContext.finish();
+        CommandContext& presentPassGraphicsContext = mGraphicsContextPool.requestContext();
+        mVkFencesGraphics[frame.index] = presentPassGraphicsContext.getFence();
+        mVkFencesImagesInFlight[backBuffer.imageIndex] = presentPassGraphicsContext.getFence();
+        presentPassGraphicsContext.reset();
 
-        VkCommandBufferSubmitInfo vkCommandBufferSubmitInfoCompute{};
-        vkCommandBufferSubmitInfoCompute.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-        vkCommandBufferSubmitInfoCompute.commandBuffer = computeContext.get();
+        presentPassGraphicsContext.transitionBarrier(backBuffer.image, ResourceStates::Undefined, ResourceStates::RenderTarget);
 
-        VkSemaphoreSubmitInfo vkSemaphoreSubmitInfoWaitCompute{};
-        vkSemaphoreSubmitInfoWaitCompute.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfoWaitCompute.semaphore = mVkSemaphoresGraphicsReadDone[frame.index];
-        vkSemaphoreSubmitInfoWaitCompute.stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        mPresentPass.preRender(presentPassGraphicsContext, mQueueFamilies, mResourceManager, frame);
+        mPresentPass.render(presentPassGraphicsContext, mResourceManager, frame);
+        mPresentPass.postRender(presentPassGraphicsContext, mQueueFamilies, mResourceManager, frame);
 
-        VkSemaphoreSubmitInfo vkSemaphoreSubmitInfoSignalCompute{};
-        vkSemaphoreSubmitInfoSignalCompute.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfoSignalCompute.semaphore = mVkSemaphoresComputeFinished[frame.index];
-        vkSemaphoreSubmitInfoSignalCompute.stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        presentPassGraphicsContext.transitionBarrier(backBuffer.image, ResourceStates::RenderTarget, ResourceStates::RenderTarget);
 
-        VkSubmitInfo2 vkSubmitInfo2Compute{};
-        vkSubmitInfo2Compute.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        vkSubmitInfo2Compute.waitSemaphoreInfoCount = mHasGraphicsReadPending[frame.index] ? 1u : 0u;
-        vkSubmitInfo2Compute.pWaitSemaphoreInfos = &vkSemaphoreSubmitInfoWaitCompute;
-        vkSubmitInfo2Compute.commandBufferInfoCount = 1;
-        vkSubmitInfo2Compute.pCommandBufferInfos = &vkCommandBufferSubmitInfoCompute;
-        vkSubmitInfo2Compute.signalSemaphoreInfoCount = 1;
-        vkSubmitInfo2Compute.pSignalSemaphoreInfos = &vkSemaphoreSubmitInfoSignalCompute;
+        mImGuiPass.preRender(presentPassGraphicsContext, mQueueFamilies, mResourceManager, frame);
+        mImGuiPass.render(presentPassGraphicsContext, mResourceManager, frame);
+        mImGuiPass.postRender(presentPassGraphicsContext, mQueueFamilies, mResourceManager, frame);
 
-        const VkResult vkResultComputeSubmit = vkQueueSubmit2(mVkQueueCompute, 1, &vkSubmitInfo2Compute, computeContext.getFence());
-        HEX_ASSERT(vkResultComputeSubmit == VK_SUCCESS, "Failed to submit to compute VkQueue. ", utility::translateErrorCode(vkResultComputeSubmit).c_str());
+        presentPassGraphicsContext.transitionBarrier(backBuffer.image, ResourceStates::RenderTarget, ResourceStates::Present);
 
-        CommandContext& graphicsContext = mGraphicsContextPool.requestContext();
-        mVkFencesGraphics[frame.index] = graphicsContext.getFence();
-        vkFenceImageInFlight = graphicsContext.getFence();
-        graphicsContext.reset();
-
-        graphicsContext.transitionBarrier(vkImageBackBuffer, ResourceStates::Undefined, ResourceStates::RenderTarget);
-
-        mPresentPass.getInputOutputs(graphicsContext, mResourceManager, frame);
-        mPresentPass.render(graphicsContext, mResourceManager, frame);
-
-        graphicsContext.transitionBarrier(vkImageBackBuffer, ResourceStates::RenderTarget, ResourceStates::RenderTarget);
-
-        mImGuiPass.render(graphicsContext, mResourceManager, frame);
-
-        graphicsContext.transitionBarrier(vkImageBackBuffer, ResourceStates::RenderTarget, ResourceStates::Present);
-
-        graphicsContext.finish();
-
-        VkCommandBufferSubmitInfo vkCommandBufferSubmitInfoGraphics{};
-        vkCommandBufferSubmitInfoGraphics.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-        vkCommandBufferSubmitInfoGraphics.commandBuffer = graphicsContext.get();
-
-        std::array<VkSemaphoreSubmitInfo, 2> vkSemaphoreSubmitInfosWaitGraphics{};
-        vkSemaphoreSubmitInfosWaitGraphics[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfosWaitGraphics[0].semaphore = backBuffer.imageAvailable;
-        vkSemaphoreSubmitInfosWaitGraphics[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        vkSemaphoreSubmitInfosWaitGraphics[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfosWaitGraphics[1].semaphore = mVkSemaphoresComputeFinished[frame.index];
-        vkSemaphoreSubmitInfosWaitGraphics[1].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-
-        std::array<VkSemaphoreSubmitInfo, 2> vkSemaphoreSubmitInfosSignalGraphics{};
-        vkSemaphoreSubmitInfosSignalGraphics[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfosSignalGraphics[0].semaphore = backBuffer.renderFinished;
-        vkSemaphoreSubmitInfosSignalGraphics[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        vkSemaphoreSubmitInfosSignalGraphics[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        vkSemaphoreSubmitInfosSignalGraphics[1].semaphore = mVkSemaphoresGraphicsReadDone[frame.index];
-        vkSemaphoreSubmitInfosSignalGraphics[1].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-
-        VkSubmitInfo2 vkSubmitInfo2Graphics{};
-        vkSubmitInfo2Graphics.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        vkSubmitInfo2Graphics.waitSemaphoreInfoCount = static_cast<uint32_t>(vkSemaphoreSubmitInfosWaitGraphics.size());
-        vkSubmitInfo2Graphics.pWaitSemaphoreInfos = vkSemaphoreSubmitInfosWaitGraphics.data();
-        vkSubmitInfo2Graphics.commandBufferInfoCount = 1;
-        vkSubmitInfo2Graphics.pCommandBufferInfos = &vkCommandBufferSubmitInfoGraphics;
-        vkSubmitInfo2Graphics.signalSemaphoreInfoCount = static_cast<uint32_t>(vkSemaphoreSubmitInfosSignalGraphics.size());
-        vkSubmitInfo2Graphics.pSignalSemaphoreInfos = vkSemaphoreSubmitInfosSignalGraphics.data();
-
-        const VkResult vkResultGraphicsSubmit = vkQueueSubmit2(mVkQueueGraphics, 1, &vkSubmitInfo2Graphics, graphicsContext.getFence());
-        HEX_ASSERT(vkResultGraphicsSubmit == VK_SUCCESS, "Failed to submit to graphics VkQueue. ", utility::translateErrorCode(vkResultGraphicsSubmit).c_str());
-
-        mHasGraphicsReadPending[frame.index] = true;
+        submitGraphics(frame, backBuffer, { presentPassGraphicsContext.finish() });
 
         if (!mSwapchain->present(mVkQueueGraphics, backBuffer))
         {
@@ -256,5 +231,95 @@ namespace graphics
         mVkFencesImagesInFlight.assign(mSwapchain->getImageCount(), VK_NULL_HANDLE);
 
         mRayTracingPass.resize(width, height, mResourceManager);
+    }
+
+    void Renderer::waitForFence(VkFence fence) const
+    {
+        if (fence == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        const VkResult vkResult = vkWaitForFences(mDevice.get(), 1, &fence, VK_TRUE, UINT64_MAX);
+        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to wait for VkFence. ", utility::translateErrorCode(vkResult).c_str());
+    }
+
+    bool Renderer::acquireBackBuffer(Swapchain::BackBuffer& backBuffer)
+    {
+        if (!mSwapchain->acquireNextBackBuffer(backBuffer))
+        {
+            const platform::Window::Description& description = mWindow.getDescription();
+            resize(description.width, description.height);
+            return false;
+        }
+
+        mResourceManager.registerImageView("RT_BackBuffer_Renderer", backBuffer.view, backBuffer.extent);
+        return true;
+    }
+
+    void Renderer::submitCopy(FrameConstants frame, const std::vector<VkCommandBufferSubmitInfo>& commandBufferSubmitInfos)
+    {
+        std::array<VkSemaphoreSubmitInfo, FRAMES_IN_FLIGHT> vkSemaphoreSubmitInfosSignalCopy{};
+        for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
+        {
+            vkSemaphoreSubmitInfosSignalCopy[i].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            vkSemaphoreSubmitInfosSignalCopy[i].semaphore = mVkSemaphoresCopyFinished[i];
+            vkSemaphoreSubmitInfosSignalCopy[i].stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            mHasCopyPending[i] = true;
+        }
+
+        submitBatch(mVkQueueCopy, commandBufferSubmitInfos, {}, { vkSemaphoreSubmitInfosSignalCopy.begin(), vkSemaphoreSubmitInfosSignalCopy.end() }, mVkFencesCopy[frame.index]);
+    }
+
+    void Renderer::submitCompute(FrameConstants frame, const std::vector<VkCommandBufferSubmitInfo>& commandBufferSubmitInfos)
+    {
+        std::vector<VkSemaphoreSubmitInfo> vkSemaphoreSubmitInfosWaitCompute;
+        if (mHasGraphicsReadPending[frame.index])
+        {
+            VkSemaphoreSubmitInfo vkSemaphoreSubmitInfo{};
+            vkSemaphoreSubmitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            vkSemaphoreSubmitInfo.semaphore = mVkSemaphoresGraphicsReadDone[frame.index];
+            vkSemaphoreSubmitInfo.stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            vkSemaphoreSubmitInfosWaitCompute.push_back(vkSemaphoreSubmitInfo);
+        }
+        if (mHasCopyPending[frame.index])
+        {
+            VkSemaphoreSubmitInfo vkSemaphoreSubmitInfo{};
+            vkSemaphoreSubmitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            vkSemaphoreSubmitInfo.semaphore = mVkSemaphoresCopyFinished[frame.index];
+            vkSemaphoreSubmitInfo.stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            vkSemaphoreSubmitInfosWaitCompute.push_back(vkSemaphoreSubmitInfo);
+            mHasCopyPending[frame.index] = false;
+        }
+
+        VkSemaphoreSubmitInfo vkSemaphoreSubmitInfoSignalCompute{};
+        vkSemaphoreSubmitInfoSignalCompute.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        vkSemaphoreSubmitInfoSignalCompute.semaphore = mVkSemaphoresComputeFinished[frame.index];
+        vkSemaphoreSubmitInfoSignalCompute.stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+        submitBatch(mVkQueueCompute, commandBufferSubmitInfos, vkSemaphoreSubmitInfosWaitCompute, { vkSemaphoreSubmitInfoSignalCompute }, mVkFencesCompute[frame.index]);
+    }
+
+    void Renderer::submitGraphics(FrameConstants frame, const Swapchain::BackBuffer& backBuffer, const std::vector<VkCommandBufferSubmitInfo>& commandBufferSubmitInfos)
+    {
+        std::vector<VkSemaphoreSubmitInfo> vkSemaphoreSubmitInfosWaitGraphics(2);
+        vkSemaphoreSubmitInfosWaitGraphics[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        vkSemaphoreSubmitInfosWaitGraphics[0].semaphore = backBuffer.imageAvailable;
+        vkSemaphoreSubmitInfosWaitGraphics[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        vkSemaphoreSubmitInfosWaitGraphics[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        vkSemaphoreSubmitInfosWaitGraphics[1].semaphore = mVkSemaphoresComputeFinished[frame.index];
+        vkSemaphoreSubmitInfosWaitGraphics[1].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+
+        std::vector<VkSemaphoreSubmitInfo> vkSemaphoreSubmitInfosSignalGraphics(2);
+        vkSemaphoreSubmitInfosSignalGraphics[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        vkSemaphoreSubmitInfosSignalGraphics[0].semaphore = backBuffer.renderFinished;
+        vkSemaphoreSubmitInfosSignalGraphics[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        vkSemaphoreSubmitInfosSignalGraphics[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        vkSemaphoreSubmitInfosSignalGraphics[1].semaphore = mVkSemaphoresGraphicsReadDone[frame.index];
+        vkSemaphoreSubmitInfosSignalGraphics[1].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+
+        submitBatch(mVkQueueGraphics, commandBufferSubmitInfos, vkSemaphoreSubmitInfosWaitGraphics, vkSemaphoreSubmitInfosSignalGraphics, mVkFencesGraphics[frame.index]);
+
+        mHasGraphicsReadPending[frame.index] = true;
     }
 }

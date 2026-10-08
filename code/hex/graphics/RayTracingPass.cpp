@@ -11,11 +11,55 @@
 
 namespace graphics
 {
+    RayTracingPassData::RayTracingPassData()
+        : mParams{}
+    {
+        recalculate();
+    }
+
+    void RayTracingPassData::recalculate()
+    {
+        const float viewportHeight = 2.0f;
+        const float aspectRatio = static_cast<float>(IMAGE_WIDTH) / static_cast<float>(IMAGE_HEIGHT);
+        const float viewportWidth = viewportHeight * aspectRatio;
+
+        const vec3f viewportU = vec3f(viewportWidth, 0.0f, 0.0f);
+        const vec3f viewportV = vec3f(0.0f, -viewportHeight, 0.0f);
+
+        const vec3f pixelDeltaU = viewportU / static_cast<float>(IMAGE_WIDTH);
+        const vec3f pixelDeltaV = viewportV / static_cast<float>(IMAGE_HEIGHT);
+
+        const vec3f viewportUpperLeft = mCameraCenter - vec3f(0.0f, 0.0f, mFocalLength) - (viewportU * 0.5f) - (viewportV * 0.5f);
+        const vec3f pixel00Loc = viewportUpperLeft + 0.5f * (pixelDeltaU + pixelDeltaV);
+
+        mParams.cameraCenter = mCameraCenter;
+        mParams.pixel00Loc = pixel00Loc;
+        mParams.pixelDeltaU = pixelDeltaU;
+        mParams.pixelDeltaV = pixelDeltaV;
+    }
+
     void RayTracingPassData::imGUIRender()
     {
         ImGui::Begin("Ray Tracing Pass Data");
 
         imGUICommonParams();
+
+        if (ImGui::CollapsingHeader("Ray Tracing Params"))
+        {
+            bool changed = false;
+            changed |= ImGui::DragFloat3("Camera Center", reinterpret_cast<float*>(&mCameraCenter));
+            changed |= ImGui::DragFloat("Focal Length", &mFocalLength);
+
+            if (changed)
+            {
+                recalculate();
+            }
+
+            ImGui::InputFloat3("Pixel00 Loc", reinterpret_cast<float*>(&mParams.pixel00Loc), "%.3f", ImGuiInputTextFlags_ReadOnly);
+            ImGui::InputFloat3("Pixel Delta U", reinterpret_cast<float*>(&mParams.pixelDeltaU), "%.3f", ImGuiInputTextFlags_ReadOnly);
+            ImGui::InputFloat3("Pixel Delta V", reinterpret_cast<float*>(&mParams.pixelDeltaV), "%.3f", ImGuiInputTextFlags_ReadOnly);
+        }
+
         imGUISave();
 
         ImGui::End();
@@ -23,17 +67,19 @@ namespace graphics
 
     void RayTracingPassData::reset()
     {
-        mParams = Params{};
+        mCameraCenter = vec3f(0.0f);
+        mFocalLength = 1.0f;
+        recalculate();
     }
 
-    ResourceTable::Layout RayTracingPass::buildResourceTableLayout()
-    {
+	ResourceTable::Layout RayTracingPass::buildResourceTableLayout()
+	{
         ResourceTable::Layout layout{};
         layout.vkShaderStageFlagsVisibility = VK_SHADER_STAGE_COMPUTE_BIT;
         layout.ranges = {
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
-            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
-            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 }
+            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }
         };
         return layout;
     }
@@ -62,76 +108,96 @@ namespace graphics
         return pipeline;
     }
 
+    VkDescriptorSetLayout RayTracingPass::createResourceTables(ResourceManager& resourceManager)
+    {
+        VkDescriptorSetLayout vkDescriptorSetLayout = VK_NULL_HANDLE;
+        for (uint32_t frameIndex = 0; frameIndex < FRAMES_IN_FLIGHT; ++frameIndex)
+        {
+            const ResourceTable& resourceTable = resourceManager.createResourceTable(frameResourceID("ResourceTable_RayTracing_DispatchPass", frameIndex), buildResourceTableLayout());
+            vkDescriptorSetLayout = resourceTable.getDescriptorSetLayout();
+        }
+        return vkDescriptorSetLayout;
+    }
+
     RayTracingPass::RayTracingPass(const Device& device, ResourceManager& resourceManager)
         : mPassData{}
-        , mResourceTable{ {
-            ResourceTable{ device, resourceManager.descriptorAllocator(), buildResourceTableLayout() },
-            ResourceTable{ device, resourceManager.descriptorAllocator(), buildResourceTableLayout() },
-            ResourceTable{ device, resourceManager.descriptorAllocator(), buildResourceTableLayout() }
-        } }
-        , mShaderInput{ ShaderInput::CreateInfo{ { mResourceTable[0].getDescriptorSetLayout() }, buildPushConstantRanges() } }
+        , mShaderInput{ ShaderInput::CreateInfo{ { createResourceTables(resourceManager) }, buildPushConstantRanges() } }
         , mPipeline{ buildPipeline(device, mShaderInput) }
+        , mParamsAcquirePending{}
     {
         for (uint32_t frameIndex = 0; frameIndex < FRAMES_IN_FLIGHT; ++frameIndex)
         {
-            const std::string outputName = frameResourceID("UA_OutputColor", frameIndex);
-
-            resourceManager.createRenderTexture(
-                outputName,
-                RayTracingPassData::IMAGE_WIDTH, RayTracingPassData::IMAGE_HEIGHT,
-                RayTracingPassData::SCENE_COLOR_FORMAT,
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                MemoryHeap::ResourceCategory::RenderTargetData);
-
-            resourceManager.createImageView(outputName, ResourceManager::ImageViewCreateInfo{}, "RT_OutputColor");
-
-            resourceManager.createBuffer(
-                frameResourceID("RT_CB_PassConstants", frameIndex),
-                ResourceManager::BufferCreateInfo{ sizeof(PassConstants), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT },
-                MemoryHeap::ResourceCategory::UploadPersistentData);
-
-            resourceManager.createBuffer(
-                frameResourceID("CB_RayTracingParams", frameIndex),
-                ResourceManager::BufferCreateInfo{ sizeof(RayTracingPassData::Params), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT },
-                MemoryHeap::ResourceCategory::UploadPersistentData);
+            createGPUResources(frameIndex, resourceManager);
         }
     }
 
-    void RayTracingPass::resize(const uint32_t, const uint32_t, ResourceManager&)
+    bool RayTracingPass::needsCopyDataToGPU() const
     {
+        return mPassData.getIsDirty();
     }
 
-    void RayTracingPass::copyDataToGPU(CommandContext&, ResourceManager&)
+    void RayTracingPass::copyDataToGPU(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager)
     {
+        mPassData.setIsDirty(false);
+
+        const RayTracingPassData::Params& params = mPassData.getParams();
+
+        for (uint32_t frameIndex = 0; frameIndex < FRAMES_IN_FLIGHT; ++frameIndex)
+        {
+            const std::string uploaderName = frameResourceID("Uploader_CB_RayTracingParams_RayTracing_DispatchPass", frameIndex);
+            const std::string destinationName = frameResourceID("CB_RayTracingParams_RayTracing_DispatchPass", frameIndex);
+
+            resourceManager.writeBuffer(uploaderName, &params, sizeof(params));
+            context.copyBuffer(resourceManager.getBuffer(uploaderName), resourceManager.getBuffer(destinationName), sizeof(params));
+
+            context.transitionBarrier(resourceManager.getBuffer(destinationName), ResourceStates::CopyDest, ResourceStates::ConstantBufferRead, queueFamilies.copy, queueFamilies.compute, sizeof(RayTracingPassData::Params));
+            mParamsAcquirePending[frameIndex] = true;
+        }
     }
 
-    void RayTracingPass::freeGPUUploadData(ResourceManager&)
+    void RayTracingPass::freeGPUUploadData(ResourceManager& resourceManager)
     {
+        for (uint32_t frameIndex = 0; frameIndex < FRAMES_IN_FLIGHT; ++frameIndex)
+        {
+            resourceManager.releaseBuffer(frameResourceID("Uploader_CB_RayTracingParams_RayTracing_DispatchPass", frameIndex));
+        }
     }
 
-    void RayTracingPass::getInputOutputs(CommandContext& context, ResourceManager& resourceManager, FrameConstants frame)
+    void RayTracingPass::preDispatch(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame)
     {
-        resourceManager.transitionImage(context, frameResourceID("UA_OutputColor", frame.index), ResourceStates::UnorderedAccess);
+        const VkImage vkImageSceneColor = resourceManager.getImage(frameResourceID("UA_SceneColor_RayTracing_DispatchPass", frame.index));
+        context.transitionBarrier(vkImageSceneColor, ResourceStates::PixelShaderResource, ResourceStates::UnorderedAccess, VK_IMAGE_ASPECT_COLOR_BIT, queueFamilies.graphics, queueFamilies.compute);
+
+        if (mParamsAcquirePending[frame.index])
+        {
+            const std::string destinationName = frameResourceID("CB_RayTracingParams_RayTracing_DispatchPass", frame.index);
+            context.transitionBarrier(resourceManager.getBuffer(destinationName), ResourceStates::CopyDest, ResourceStates::ConstantBufferRead, queueFamilies.copy, queueFamilies.compute, sizeof(RayTracingPassData::Params));
+            mParamsAcquirePending[frame.index] = false;
+        }
+    }
+
+    void RayTracingPass::postDispatch(CommandContext& context, const QueueFamilies& queueFamilies, ResourceManager& resourceManager, FrameConstants frame)
+    {
+        const VkImage vkImageSceneColor = resourceManager.getImage(frameResourceID("UA_SceneColor_RayTracing_DispatchPass", frame.index));
+        context.transitionBarrier(vkImageSceneColor, ResourceStates::UnorderedAccess, ResourceStates::PixelShaderResource, VK_IMAGE_ASPECT_COLOR_BIT, queueFamilies.compute, queueFamilies.graphics);
     }
 
     void RayTracingPass::dispatch(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame)
     {
-        const std::string outputName = frameResourceID("UA_OutputColor", frame.index);
-        const VkImageView vkImageViewTarget = resourceManager.getImageView(outputName, "RT_OutputColor");
+        const std::string outputName = frameResourceID("UA_SceneColor_RayTracing_DispatchPass", frame.index);
+        const VkImageView vkImageViewTarget = resourceManager.getImageView(outputName, "SR_SceneColor");
         const VkExtent2D vkExtent2D = resourceManager.getExtent(outputName);
 
-        const std::string passConstantsBufferName = frameResourceID("RT_CB_PassConstants", frame.index);
+        const std::string passConstantsBufferName = frameResourceID("CB_CommonPassParams_RayTracing_DispatchPass", frame.index);
         const PassConstants passConstants = mPassData.getPassConstants();
         resourceManager.writeBuffer(passConstantsBufferName, &passConstants, sizeof(passConstants));
 
-        const std::string rayTracingParamsBufferName = frameResourceID("CB_RayTracingParams", frame.index);
-        const RayTracingPassData::Params params = mPassData.getParams();
-        resourceManager.writeBuffer(rayTracingParamsBufferName, &params, sizeof(params));
+        const std::string rayTracingParamsBufferName = frameResourceID("CB_RayTracingParams_RayTracing_DispatchPass", frame.index);
 
-        ResourceTable& resourceTable = mResourceTable[frame.index];
+        ResourceTable& resourceTable = resourceManager.getResourceTable(frameResourceID("ResourceTable_RayTracing_DispatchPass", frame.index));
         resourceTable.setResource(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, resourceManager.getBuffer(passConstantsBufferName));
-        resourceTable.setResource(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, vkImageViewTarget, ResourceStates::UnorderedAccess);
-        resourceTable.setResource(2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, resourceManager.getBuffer(rayTracingParamsBufferName));
+        resourceTable.setResource(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, resourceManager.getBuffer(rayTracingParamsBufferName));
+        resourceTable.setResource(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, vkImageViewTarget, ResourceStates::UnorderedAccess);
 
         context.bindPipeline(mPipeline);
 
@@ -143,4 +209,33 @@ namespace graphics
 
         context.dispatch2D(vkExtent2D.width, vkExtent2D.height, 32, 32);
     }
+
+	void RayTracingPass::createGPUResources(const uint32_t frameIndex, ResourceManager& resourceManager)
+	{
+        const std::string outputName = frameResourceID("UA_SceneColor_RayTracing_DispatchPass", frameIndex);
+
+        resourceManager.createRenderTexture(
+            outputName,
+            RayTracingPassData::IMAGE_WIDTH, RayTracingPassData::IMAGE_HEIGHT,
+            RayTracingPassData::SCENE_COLOR_FORMAT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            MemoryHeap::ResourceCategory::RenderTargetData);
+
+        resourceManager.createImageView(outputName, ResourceManager::ImageViewCreateInfo{}, "SR_SceneColor");
+
+        resourceManager.createBuffer(
+            frameResourceID("CB_CommonPassParams_RayTracing_DispatchPass", frameIndex),
+            ResourceManager::BufferCreateInfo{ sizeof(PassConstants), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT },
+            MemoryHeap::ResourceCategory::UploadPersistentData);
+
+        resourceManager.createBuffer(
+            frameResourceID("CB_RayTracingParams_RayTracing_DispatchPass", frameIndex),
+            ResourceManager::BufferCreateInfo{ sizeof(RayTracingPassData::Params), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT },
+            MemoryHeap::ResourceCategory::ConstantsData);
+
+        resourceManager.createBuffer(
+            frameResourceID("Uploader_CB_RayTracingParams_RayTracing_DispatchPass", frameIndex),
+            ResourceManager::BufferCreateInfo{ sizeof(RayTracingPassData::Params), VK_BUFFER_USAGE_TRANSFER_SRC_BIT },
+            MemoryHeap::ResourceCategory::UploadData);
+	}
 }

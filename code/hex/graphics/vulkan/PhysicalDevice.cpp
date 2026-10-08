@@ -86,31 +86,20 @@ namespace graphics
         return queueFamilies;
     }
 
-    uint32_t PhysicalDevice::getQueueFamilyIndex(const VkQueueFlags& flags) const
+    uint32_t PhysicalDevice::getQueueFamilyIndex(const VkQueueFlags include, const VkQueueFlags exclude) const
     {
         const std::vector<VkQueueFamilyProperties> queueFamilies = getAllQueueFamilyProperties();
 
         for (size_t i = 0; i < queueFamilies.size(); ++i)
         {
-            if ((queueFamilies[i].queueCount > 0) && ((queueFamilies[i].queueFlags & flags) == flags))
+            const VkQueueFlags flags = queueFamilies[i].queueFlags;
+            if ((queueFamilies[i].queueCount > 0) && ((flags & include) == include) && ((flags & exclude) == 0))
             {
                 return static_cast<uint32_t>(i);
             }
         }
 
         return UINT32_MAX;
-    }
-
-    uint32_t PhysicalDevice::getGraphicsQueueFamilyIndex() const
-    {
-        return getQueueFamilyIndex(VK_QUEUE_GRAPHICS_BIT);
-    }
-
-    uint32_t PhysicalDevice::getQueueCount(const uint32_t familyIndex) const
-    {
-        const std::vector<VkQueueFamilyProperties> queueFamilies = getAllQueueFamilyProperties();
-        HEX_ASSERT(familyIndex < queueFamilies.size(), "Invalid queue family index ", familyIndex);
-        return queueFamilies[familyIndex].queueCount;
     }
 
     bool PhysicalDevice::checkSurfaceSupport(const uint32_t queueFamilyIndex, VkSurfaceKHR surface) const
