@@ -13,6 +13,7 @@ namespace graphics
 {
     RayTracingPassData::RayTracingPassData()
         : mParams{}
+        , mSceneColorBindings{}
     {
         recalculate();
     }
@@ -38,6 +39,17 @@ namespace graphics
         mParams.pixelDeltaV = pixelDeltaV;
     }
 
+    void RayTracingPassData::setSceneColorPreview(const Device& device, const uint32_t frameIndex, VkImage vkImageSceneColor)
+    {
+        ImGuiTextureBinding& sceneColorBinding = mSceneColorBindings[frameIndex];
+        if (sceneColorBinding.vkDescriptorSet == VK_NULL_HANDLE)
+        {
+            sceneColorBinding = ImGuiPass::bind(device, ImGuiPass::getSampler(ImGuiPass::Sampler::LinearClamp), vkImageSceneColor, SCENE_COLOR_FORMAT, ResourceStates::UnorderedAccess);
+        }
+
+        mSceneColorTextureId = sceneColorBinding.textureId;
+    }
+
     void RayTracingPassData::imGUIRender()
     {
         ImGui::Begin("Ray Tracing Pass Data");
@@ -58,6 +70,14 @@ namespace graphics
             ImGui::InputFloat3("Pixel00 Loc", reinterpret_cast<float*>(&mParams.pixel00Loc), "%.3f", ImGuiInputTextFlags_ReadOnly);
             ImGui::InputFloat3("Pixel Delta U", reinterpret_cast<float*>(&mParams.pixelDeltaU), "%.3f", ImGuiInputTextFlags_ReadOnly);
             ImGui::InputFloat3("Pixel Delta V", reinterpret_cast<float*>(&mParams.pixelDeltaV), "%.3f", ImGuiInputTextFlags_ReadOnly);
+        }
+
+        if (ImGui::CollapsingHeader("Scene Color", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            if (mSceneColorTextureId != ImTextureID{})
+            {
+                ImGui::Image(mSceneColorTextureId, ImVec2{ static_cast<float>(IMAGE_WIDTH) / 8.0f, static_cast<float>(IMAGE_HEIGHT) / 8.0f });
+            }
         }
 
         imGUISave();
@@ -124,10 +144,22 @@ namespace graphics
         , mShaderInput{ ShaderInput::CreateInfo{ { createResourceTables(resourceManager) }, buildPushConstantRanges() } }
         , mPipeline{ buildPipeline(device, mShaderInput) }
         , mParamsAcquirePending{}
+        , mDevice{ device }
     {
         for (uint32_t frameIndex = 0; frameIndex < FRAMES_IN_FLIGHT; ++frameIndex)
         {
             createGPUResources(frameIndex, resourceManager);
+        }
+    }
+
+    RayTracingPass::~RayTracingPass()
+    {
+        for (const ImGuiTextureBinding& binding : mPassData.getSceneColorBindings())
+        {
+            if (binding.vkImageView != VK_NULL_HANDLE)
+            {
+                vkDestroyImageView(mDevice.get(), binding.vkImageView, nullptr);
+            }
         }
     }
 
@@ -180,6 +212,8 @@ namespace graphics
     {
         const VkImage vkImageSceneColor = resourceManager.getImage(frameResourceID("UA_SceneColor_RayTracing_DispatchPass", frame.index));
         context.transitionBarrier(vkImageSceneColor, ResourceStates::UnorderedAccess, ResourceStates::PixelShaderResource, VK_IMAGE_ASPECT_COLOR_BIT, queueFamilies.compute, queueFamilies.graphics);
+
+        mPassData.setSceneColorPreview(mDevice, frame.index, vkImageSceneColor);
     }
 
     void RayTracingPass::dispatch(CommandContext& context, const ResourceManager& resourceManager, FrameConstants frame)

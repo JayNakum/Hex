@@ -20,6 +20,7 @@ dependencies["vulkan_profiles"] = "%{vendors_path}/Vulkan-Profiles/Vulkan-Profil
 dependencies["glfw"] = "%{vendors_path}/glfw/glfw-3.5.1.bin.WIN64"
 dependencies["slang"] = "%{vendors_path}/slang"
 dependencies["imgui"] = "%{vendors_path}/imgui/imgui-1.92.9b-docking"
+dependencies["stb"] = "%{vendors_path}/stb/stb-master"
 
 -- SHADER TOOLCHAIN --
 slangc_bin = "%{dependencies.slang}/bin/slangc.exe"

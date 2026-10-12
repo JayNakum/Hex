@@ -27,6 +27,13 @@ VertexOutput vertMain(uint vid : SV_VertexID)
     return output;
 }
 
+float3 srgb_decode(const float3 color)
+{
+    const float3 lo = color / 12.92f;
+    const float3 hi = pow((color + 0.055f) / 1.055f, 2.4f);
+    return select(color <= 0.04045f, lo, hi);
+}
+
 [shader("fragment")]
 float4 fragMain(VertexOutput input, uniform FrameConstants frameConstants) : SV_Target
 {
@@ -49,5 +56,6 @@ float4 fragMain(VertexOutput input, uniform FrameConstants frameConstants) : SV_
         return float4(0.0, 0.0, 0.0, 1.0);
     }
 
-    return srcTexture.Sample(srcSampler, uv);
+    const float4 color = srcTexture.Sample(srcSampler, uv);
+    return float4(srgb_decode(color.rgb), color.a);
 }

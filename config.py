@@ -20,6 +20,7 @@ DEPENDENCIES = {
     'glfw': "https://github.com/glfw/glfw/releases/download/3.5.1/glfw-3.5.1.bin.WIN64.zip",
     'slang': "https://github.com/shader-slang/slang/releases/download/v2026.17/slang-2026.17-windows-x86_64.zip",
     'imgui': "https://github.com/ocornut/imgui/archive/refs/tags/v1.92.9b-docking.zip",
+    'stb': "https://github.com/nothings/stb/archive/refs/heads/master.zip",
 }
 
 def fetch_dependencies(working_dir:str) -> bool:

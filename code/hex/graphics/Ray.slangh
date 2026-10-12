@@ -1,0 +1,38 @@
+#pragma once
+
+#include "utility.slangh"
+
+struct Ray
+{
+    float3 origin;
+    float3 direction;
+};
+
+inline float3 ray_at(in const Ray ray, in const float t)
+{
+    return ray.origin + t * ray.direction;
+}
+
+struct Interval
+{
+    float min;
+    float max;
+};
+
+static const Interval interval_empty = { +INFINITY, -INFINITY };
+static const Interval interval_universe = { -INFINITY, +INFINITY };
+
+inline float interval_size(in const Interval interval)
+{
+    return interval.max - interval.min;
+}
+
+inline bool interval_contains(in const Interval interval, in const float x)
+{
+    return interval.min <= x && x <= interval.max;
+}
+
+inline bool interval_surrounds(in const Interval interval, in const float x)
+{
+    return interval.min < x && x < interval.max;
+}

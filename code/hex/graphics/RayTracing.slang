@@ -1,5 +1,9 @@
 #include "FramePass.slangh"
 
+#include "utility.slangh"
+#include "Ray.slangh"
+#include "RayCollision.slangh"
+
 struct RayTracingParams
 {
     float3 cameraCenter;
@@ -19,20 +23,43 @@ ConstantBuffer<PassConstants> passConstants;
 ConstantBuffer<RayTracingParams> rayTracingParams;
 RWTexture2D<float4> outputImage;
 
-struct Ray
-{
-    float3 origin;
-    float3 direction;
+static const uint SPHERE_COUNT = 2;
+static const Sphere SCENE_SPHERES[SPHERE_COUNT] = {
+    { float3(0.0f, 0.0f, -1.0f), 0.5f },
+    { float3(0.0f, -100.5f, -1.0f), 100.0f }
 };
-
-float3 ray_at(const Ray ray, const float t)
+bool hit(in const Ray ray, in Interval rayT, out HitRecord hitRecord)
 {
-    return ray.origin + t * ray.direction;
+    HitRecord tempRec;
+    bool hitAnything = false;
+
+    float closestSoFar = rayT.max;
+    [unroll]
+    for (uint i = 0; i < SPHERE_COUNT; ++i)
+    {
+        if (hit(SCENE_SPHERES[i], ray, {rayT.min, closestSoFar}, tempRec))
+        {
+            hitAnything = true;
+            closestSoFar = tempRec.t;
+            hitRecord = tempRec;
+        }
+    }
+
+    return hitAnything;
 }
 
-float3 ray_color(const Ray ray)
+float3 ray_color(in const Ray ray)
 {
-    return float3(0.0f);
+    HitRecord hitRecord;
+    const bool didHit = hit(ray, { 0.0f, INFINITY }, hitRecord);
+    if (didHit)
+    {
+        return 0.5f * (hitRecord.normal + 1.0f);
+    }
+
+    const float3 unit_direction = normalize(ray.direction);
+    const float a = 0.5f * (unit_direction.y + 1.0f);
+    return (1.0f - a) * float3(1.0f, 1.0f, 1.0f) + a * float3(0.5f, 0.7f, 1.0f);
 }
 
 [shader("compute")]

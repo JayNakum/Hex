@@ -3,6 +3,8 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
 
+#include <stb_image.h>
+
 #include "vulkan/Instance.h"
 #include "vulkan/PhysicalDevice.h"
 #include "vulkan/Device.h"
@@ -68,6 +70,7 @@ namespace graphics
 
     std::mutex ImGuiPass::msCallbackMutex;
     std::vector<std::function<void()>> ImGuiPass::msRenderCallbacks;
+    ImGuiPass* ImGuiPass::msInstance = nullptr;
 
     void ImGuiPass::registerWindow(std::function<void()> callback)
     {
@@ -115,9 +118,35 @@ namespace graphics
         }
     }
 
+    VkSampler ImGuiPass::createSampler(const Device& device, const VkFilter vkFilter, const VkSamplerAddressMode vkAddressMode)
+    {
+        VkSamplerCreateInfo samplerCreateInfo{};
+        samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerCreateInfo.magFilter = vkFilter;
+        samplerCreateInfo.minFilter = vkFilter;
+        samplerCreateInfo.mipmapMode = (vkFilter == VK_FILTER_LINEAR) ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samplerCreateInfo.addressModeU = vkAddressMode;
+        samplerCreateInfo.addressModeV = vkAddressMode;
+        samplerCreateInfo.addressModeW = vkAddressMode;
+        samplerCreateInfo.minLod = 0.0f;
+        samplerCreateInfo.maxLod = VK_LOD_CLAMP_NONE;
+        samplerCreateInfo.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+
+        VkSampler vkSampler = VK_NULL_HANDLE;
+        HEX_ASSERT(vkCreateSampler(device.get(), &samplerCreateInfo, nullptr, &vkSampler) == VK_SUCCESS);
+
+        return vkSampler;
+    }
+
+    VkSampler ImGuiPass::getSampler(const Sampler sampler)
+    {
+        HEX_ASSERT(msInstance != nullptr, "ImGuiPass instance is not alive.");
+        return msInstance->mSamplers[static_cast<size_t>(sampler)];
+    }
+
     ImGuiPass::ImGuiPass(const Instance& instance, const PhysicalDevice& physicalDevice, const Device& device, VkQueue vkQueueGraphics, const uint32_t graphicsFamilyIndex, const VkFormat vkFormatColor, const uint32_t imageCount, GLFWwindow* glfwWindow)
-        : mPhysicalDevice{ physicalDevice }
-        , mDevice{ device }
+        : mDevice{ device }
+        , mSamplers{}
     {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -237,22 +266,25 @@ namespace graphics
         initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &vkFormatColor;
 
         ImGui_ImplVulkan_Init(&initInfo);
+
+        mSamplers[static_cast<size_t>(Sampler::LinearClamp)] = createSampler(device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+        mSamplers[static_cast<size_t>(Sampler::LinearRepeat)] = createSampler(device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+        mSamplers[static_cast<size_t>(Sampler::LinearMirror)] = createSampler(device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT);
+        mSamplers[static_cast<size_t>(Sampler::NearestClamp)] = createSampler(device, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+        mSamplers[static_cast<size_t>(Sampler::NearestRepeat)] = createSampler(device, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+        mSamplers[static_cast<size_t>(Sampler::NearestMirror)] = createSampler(device, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT);
+
+        msInstance = this;
     }
 
     ImGuiPass::~ImGuiPass()
     {
-        for (std::pair<const std::string, Texture>& entry : mTextures)
-        {
-            destroyTexture(entry.second);
-        }
-        mTextures.clear();
+        msInstance = nullptr;
 
-        for (const std::pair<VkBuffer, VkDeviceMemory>& staging : mStagingBuffersPendingFree)
+        for (const VkSampler vkSampler : mSamplers)
         {
-            vkDestroyBuffer(mDevice.get(), staging.first, nullptr);
-            vkFreeMemory(mDevice.get(), staging.second, nullptr);
+            vkDestroySampler(mDevice.get(), vkSampler, nullptr);
         }
-        mStagingBuffersPendingFree.clear();
 
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -260,146 +292,6 @@ namespace graphics
 
         std::lock_guard<std::mutex> scopedLockGuard(msCallbackMutex);
         msRenderCallbacks.clear();
-    }
-
-    ImTextureID ImGuiPass::createTextureRGBA(CommandContext& context, const std::string& id, const uint32_t width, const uint32_t height, const void* rgba8)
-    {
-        const uint64_t byteSize = static_cast<uint64_t>(width) * height * 4;
-
-        VkBufferCreateInfo vkBufferCreateInfoStaging{};
-        vkBufferCreateInfoStaging.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        vkBufferCreateInfoStaging.size = byteSize;
-        vkBufferCreateInfoStaging.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        vkBufferCreateInfoStaging.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-        VkBuffer vkBufferStaging = VK_NULL_HANDLE;
-        VkResult vkResult = vkCreateBuffer(mDevice.get(), &vkBufferCreateInfoStaging, nullptr, &vkBufferStaging);
-        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to create staging VkBuffer. ", utility::translateErrorCode(vkResult).c_str());
-
-        VkMemoryRequirements vkMemoryRequirementsStaging{};
-        vkGetBufferMemoryRequirements(mDevice.get(), vkBufferStaging, &vkMemoryRequirementsStaging);
-
-        VkMemoryAllocateInfo vkMemoryAllocateInfoStaging{};
-        vkMemoryAllocateInfoStaging.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        vkMemoryAllocateInfoStaging.allocationSize = vkMemoryRequirementsStaging.size;
-        vkMemoryAllocateInfoStaging.memoryTypeIndex = mPhysicalDevice.findMemoryType(vkMemoryRequirementsStaging.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-        VkDeviceMemory vkDeviceMemoryStaging = VK_NULL_HANDLE;
-        vkResult = vkAllocateMemory(mDevice.get(), &vkMemoryAllocateInfoStaging, nullptr, &vkDeviceMemoryStaging);
-        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to allocate staging VkDeviceMemory. ", utility::translateErrorCode(vkResult).c_str());
-
-        vkBindBufferMemory(mDevice.get(), vkBufferStaging, vkDeviceMemoryStaging, 0);
-
-        void* mappedData = nullptr;
-        vkMapMemory(mDevice.get(), vkDeviceMemoryStaging, 0, byteSize, 0, &mappedData);
-        std::memcpy(mappedData, rgba8, byteSize);
-        vkUnmapMemory(mDevice.get(), vkDeviceMemoryStaging);
-
-        Texture texture{};
-
-        VkImageCreateInfo vkImageCreateInfo{};
-        vkImageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        vkImageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
-        vkImageCreateInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-        vkImageCreateInfo.extent = { width, height, 1 };
-        vkImageCreateInfo.mipLevels = 1;
-        vkImageCreateInfo.arrayLayers = 1;
-        vkImageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-        vkImageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        vkImageCreateInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        vkImageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        vkImageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-        vkResult = vkCreateImage(mDevice.get(), &vkImageCreateInfo, nullptr, &texture.vkImage);
-        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to create VkImage. ", utility::translateErrorCode(vkResult).c_str());
-
-        VkMemoryRequirements vkMemoryRequirementsImage{};
-        vkGetImageMemoryRequirements(mDevice.get(), texture.vkImage, &vkMemoryRequirementsImage);
-
-        VkMemoryAllocateInfo vkMemoryAllocateInfoImage{};
-        vkMemoryAllocateInfoImage.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        vkMemoryAllocateInfoImage.allocationSize = vkMemoryRequirementsImage.size;
-        vkMemoryAllocateInfoImage.memoryTypeIndex = mPhysicalDevice.findMemoryType(vkMemoryRequirementsImage.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-        vkResult = vkAllocateMemory(mDevice.get(), &vkMemoryAllocateInfoImage, nullptr, &texture.vkDeviceMemory);
-        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to allocate image VkDeviceMemory. ", utility::translateErrorCode(vkResult).c_str());
-
-        vkBindImageMemory(mDevice.get(), texture.vkImage, texture.vkDeviceMemory, 0);
-
-        context.transitionBarrier(texture.vkImage, ResourceStates::Undefined, ResourceStates::CopyDest);
-        context.copyBufferToImage(vkBufferStaging, texture.vkImage, width, height);
-        context.transitionBarrier(texture.vkImage, ResourceStates::CopyDest, ResourceStates::PixelShaderResource);
-
-        mStagingBuffersPendingFree.emplace_back(vkBufferStaging, vkDeviceMemoryStaging);
-
-        VkImageViewCreateInfo vkImageViewCreateInfo{};
-        vkImageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vkImageViewCreateInfo.image = texture.vkImage;
-        vkImageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vkImageViewCreateInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-        vkImageViewCreateInfo.components = { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
-        vkImageViewCreateInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-
-        vkResult = vkCreateImageView(mDevice.get(), &vkImageViewCreateInfo, nullptr, &texture.vkImageView);
-        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to create VkImageView. ", utility::translateErrorCode(vkResult).c_str());
-
-        VkSamplerCreateInfo vkSamplerCreateInfo{};
-        vkSamplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        vkSamplerCreateInfo.magFilter = VK_FILTER_NEAREST;
-        vkSamplerCreateInfo.minFilter = VK_FILTER_NEAREST;
-        vkSamplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        vkSamplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        vkSamplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        vkSamplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        vkSamplerCreateInfo.maxLod = VK_LOD_CLAMP_NONE;
-        vkSamplerCreateInfo.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
-
-        vkResult = vkCreateSampler(mDevice.get(), &vkSamplerCreateInfo, nullptr, &texture.vkSampler);
-        HEX_ASSERT(vkResult == VK_SUCCESS, "Failed to create VkSampler. ", utility::translateErrorCode(vkResult).c_str());
-
-        texture.vkDescriptorSet = ImGui_ImplVulkan_AddTexture(texture.vkSampler, texture.vkImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-        const ImTextureID textureId = static_cast<ImTextureID>(reinterpret_cast<size_t>(texture.vkDescriptorSet));
-        mTextures[id] = texture;
-        return textureId;
-    }
-
-    void ImGuiPass::destroyTexture(Texture& texture)
-    {
-        if (texture.vkDescriptorSet != VK_NULL_HANDLE)
-        {
-            ImGui_ImplVulkan_RemoveTexture(texture.vkDescriptorSet);
-        }
-        if (texture.vkSampler != VK_NULL_HANDLE)
-        {
-            vkDestroySampler(mDevice.get(), texture.vkSampler, nullptr);
-        }
-        if (texture.vkImageView != VK_NULL_HANDLE)
-        {
-            vkDestroyImageView(mDevice.get(), texture.vkImageView, nullptr);
-        }
-        if (texture.vkImage != VK_NULL_HANDLE)
-        {
-            vkDestroyImage(mDevice.get(), texture.vkImage, nullptr);
-        }
-        if (texture.vkDeviceMemory != VK_NULL_HANDLE)
-        {
-            vkFreeMemory(mDevice.get(), texture.vkDeviceMemory, nullptr);
-        }
-
-        texture = Texture{};
-    }
-
-    void ImGuiPass::destroyTexture(const std::string& id)
-    {
-        const std::unordered_map<std::string, Texture>::iterator it = mTextures.find(id);
-        if (it == mTextures.end())
-        {
-            return;
-        }
-
-        destroyTexture(it->second);
-        mTextures.erase(it);
     }
 
     void ImGuiPass::render(CommandContext& context, const ResourceManager& resourceManager, FrameConstants)
@@ -416,14 +308,8 @@ namespace graphics
         ImGui::Begin("Hex", nullptr, ImGuiWindowFlags_None);
         ImGui::DockSpace(dockspaceId);
 
-        {
-            std::lock_guard<std::mutex> scopedLockGuard(msCallbackMutex);
-            for (const std::function<void()>& callback : msRenderCallbacks)
-            {
-                ImGui::SetNextWindowDockID(dockspaceId, ImGuiCond_FirstUseEver);
-                callback();
-            }
-        }
+        
+        ImGui::Begin("Home");
 
         const ImVec2 logoSize = drawPixelText(ImGui::GetWindowDrawList(), ImGui::GetCursorScreenPos(), "0xHex", 3.0f, IM_COL32(26, 163, 250, 255));
         ImGui::Dummy(logoSize);
@@ -435,6 +321,17 @@ namespace graphics
 #else
         ImGui::Text("Config: Release");
 #endif
+
+        ImGui::End();
+
+        {
+            std::lock_guard<std::mutex> scopedLockGuard(msCallbackMutex);
+            for (const std::function<void()>& callback : msRenderCallbacks)
+            {
+                ImGui::SetNextWindowDockID(dockspaceId, ImGuiCond_FirstUseEver);
+                callback();
+            }
+        }
 
         ImGui::End();
 
@@ -457,5 +354,143 @@ namespace graphics
             ImGui::UpdatePlatformWindows();
             ImGui::RenderPlatformWindowsDefault();
         }
+    }
+
+    ImGuiTextureBinding ImGuiPass::bind(const Device& device, VkSampler vkSampler, VkImage vkImage, const VkFormat vkFormat, const ResourceState& currentState)
+    {
+        VkImageViewCreateInfo viewCreateInfo{};
+        viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewCreateInfo.image = vkImage;
+        viewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewCreateInfo.format = vkFormat;
+        viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewCreateInfo.subresourceRange.levelCount = 1;
+        viewCreateInfo.subresourceRange.layerCount = 1;
+
+        ImGuiTextureBinding binding{};
+        HEX_ASSERT(vkCreateImageView(device.get(), &viewCreateInfo, nullptr, &binding.vkImageView) == VK_SUCCESS);
+
+        binding.vkDescriptorSet = ImGui_ImplVulkan_AddTexture(vkSampler, binding.vkImageView, currentState.vkImageLayout);
+        binding.textureId = static_cast<ImTextureID>(reinterpret_cast<size_t>(binding.vkDescriptorSet));
+
+        return binding;
+    }
+
+    void ImGuiPass::unbind(const Device& device, ImGuiTextureBinding& binding)
+    {
+        ImGui_ImplVulkan_RemoveTexture(binding.vkDescriptorSet);
+        vkDestroyImageView(device.get(), binding.vkImageView, nullptr);
+
+        binding = ImGuiTextureBinding{};
+    }
+
+    ImGuiTexture ImGuiPass::load(CommandContext& context, const PhysicalDevice& physicalDevice, const Device& device, VkSampler vkSampler, const std::string& filePath, ImGuiTextureStaging& outStaging)
+    {
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        stbi_uc* pixels = stbi_load(filePath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+        HEX_ASSERT(pixels != nullptr);
+
+        const VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * 4;
+
+        VkBufferCreateInfo bufferCreateInfo{};
+        bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferCreateInfo.size = imageSize;
+        bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        ImGuiTextureStaging staging{};
+        HEX_ASSERT(vkCreateBuffer(device.get(), &bufferCreateInfo, nullptr, &staging.vkBuffer) == VK_SUCCESS);
+
+        VkMemoryRequirements bufferMemoryRequirements{};
+        vkGetBufferMemoryRequirements(device.get(), staging.vkBuffer, &bufferMemoryRequirements);
+
+        VkMemoryAllocateInfo bufferAllocateInfo{};
+        bufferAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        bufferAllocateInfo.allocationSize = bufferMemoryRequirements.size;
+        bufferAllocateInfo.memoryTypeIndex = physicalDevice.findMemoryType(bufferMemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        HEX_ASSERT(vkAllocateMemory(device.get(), &bufferAllocateInfo, nullptr, &staging.vkDeviceMemory) == VK_SUCCESS);
+        vkBindBufferMemory(device.get(), staging.vkBuffer, staging.vkDeviceMemory, 0);
+
+        void* mappedData = nullptr;
+        vkMapMemory(device.get(), staging.vkDeviceMemory, 0, imageSize, 0, &mappedData);
+        memcpy(mappedData, pixels, static_cast<size_t>(imageSize));
+        vkUnmapMemory(device.get(), staging.vkDeviceMemory);
+
+        stbi_image_free(pixels);
+
+        ImGuiTexture texture{};
+        texture.width = static_cast<uint32_t>(width);
+        texture.height = static_cast<uint32_t>(height);
+
+        constexpr VkFormat textureFormat = VK_FORMAT_R8G8B8A8_UNORM;
+
+        VkImageCreateInfo imageCreateInfo{};
+        imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageCreateInfo.format = textureFormat;
+        imageCreateInfo.extent = { texture.width, texture.height, 1 };
+        imageCreateInfo.mipLevels = 1;
+        imageCreateInfo.arrayLayers = 1;
+        imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        HEX_ASSERT(vkCreateImage(device.get(), &imageCreateInfo, nullptr, &texture.vkImage) == VK_SUCCESS);
+
+        VkMemoryRequirements imageMemoryRequirements{};
+        vkGetImageMemoryRequirements(device.get(), texture.vkImage, &imageMemoryRequirements);
+
+        VkMemoryAllocateInfo imageAllocateInfo{};
+        imageAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        imageAllocateInfo.allocationSize = imageMemoryRequirements.size;
+        imageAllocateInfo.memoryTypeIndex = physicalDevice.findMemoryType(imageMemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        HEX_ASSERT(vkAllocateMemory(device.get(), &imageAllocateInfo, nullptr, &texture.vkDeviceMemory) == VK_SUCCESS);
+        vkBindImageMemory(device.get(), texture.vkImage, texture.vkDeviceMemory, 0);
+
+        context.transitionBarrier(texture.vkImage, ResourceStates::Undefined, ResourceStates::CopyDest);
+        context.copyBufferToImage(staging.vkBuffer, texture.vkImage, texture.width, texture.height);
+        context.transitionBarrier(texture.vkImage, ResourceStates::CopyDest, ResourceStates::PixelShaderResource);
+
+        VkImageViewCreateInfo viewCreateInfo{};
+        viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewCreateInfo.image = texture.vkImage;
+        viewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewCreateInfo.format = textureFormat;
+        viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewCreateInfo.subresourceRange.levelCount = 1;
+        viewCreateInfo.subresourceRange.layerCount = 1;
+
+        HEX_ASSERT(vkCreateImageView(device.get(), &viewCreateInfo, nullptr, &texture.vkImageView) == VK_SUCCESS);
+
+        texture.vkDescriptorSet = ImGui_ImplVulkan_AddTexture(vkSampler, texture.vkImageView, ResourceStates::PixelShaderResource.vkImageLayout);
+        texture.textureId = static_cast<ImTextureID>(reinterpret_cast<size_t>(texture.vkDescriptorSet));
+
+        outStaging = staging;
+
+        return texture;
+    }
+
+    void ImGuiPass::destroy(const Device& device, ImGuiTexture& texture)
+    {
+        ImGui_ImplVulkan_RemoveTexture(texture.vkDescriptorSet);
+        vkDestroyImageView(device.get(), texture.vkImageView, nullptr);
+        vkDestroyImage(device.get(), texture.vkImage, nullptr);
+        vkFreeMemory(device.get(), texture.vkDeviceMemory, nullptr);
+
+        texture = ImGuiTexture{};
+    }
+
+    void ImGuiPass::freeStaging(const Device& device, ImGuiTextureStaging& staging)
+    {
+        vkDestroyBuffer(device.get(), staging.vkBuffer, nullptr);
+        vkFreeMemory(device.get(), staging.vkDeviceMemory, nullptr);
+
+        staging = ImGuiTextureStaging{};
     }
 }

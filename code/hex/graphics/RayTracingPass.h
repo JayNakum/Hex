@@ -9,6 +9,7 @@
 #include "vulkan/Pipeline.h"
 
 #include "PassCore.h"
+#include "ImGUI.h"
 
 namespace graphics
 {
@@ -28,18 +29,18 @@ namespace graphics
         struct Params
         {
             vec3f cameraCenter;
-            const float _pad0 = 0.0f;
             vec3f pixel00Loc;
-            const float _pad1 = 0.0f;
             vec3f pixelDeltaU;
-            const float _pad2 = 0.0f;
             vec3f pixelDeltaV;
-            const float _pad3 = 0.0f;
         };
 
         RayTracingPassData();
 
         inline const Params& getParams() const { return mParams; }
+
+        void setSceneColorPreview(const Device& device, const uint32_t frameIndex, VkImage vkImageSceneColor);
+
+        inline const std::array<ImGuiTextureBinding, FRAMES_IN_FLIGHT>& getSceneColorBindings() const { return mSceneColorBindings; }
 
         void imGUIRender() override;
         void reset() override;
@@ -52,6 +53,9 @@ namespace graphics
         float mFocalLength = 1.0f;
 
         Params mParams;
+
+        ImTextureID mSceneColorTextureId = ImTextureID{};
+        std::array<ImGuiTextureBinding, FRAMES_IN_FLIGHT> mSceneColorBindings;
     };
 
     class ResourceManager;
@@ -60,6 +64,7 @@ namespace graphics
     {
     public:
         RayTracingPass(const Device& device, ResourceManager& resourceManager);
+        ~RayTracingPass() override;
 
         void resize(const uint32_t, const uint32_t, ResourceManager&) override {}
 
@@ -86,5 +91,7 @@ namespace graphics
         Pipeline mPipeline;
 
         std::array<bool, FRAMES_IN_FLIGHT> mParamsAcquirePending;
+
+        const Device& mDevice;
     };
 }

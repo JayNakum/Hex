@@ -1,0 +1,57 @@
+#pragma once
+
+#include "utility.slangh"
+#include "Ray.slangh"
+
+struct HitRecord
+{
+    float3 point;
+    float3 normal;
+    float t;
+    bool isFrontFace;
+};
+
+static inline void hitRecord_setFaceNormal(inout HitRecord hitRecord, in const Ray ray, in const float3 outwardNormal)
+{
+    hitRecord.isFrontFace = dot(ray.direction, outwardNormal) < 0.0f;
+    hitRecord.normal = hitRecord.isFrontFace ? outwardNormal : -outwardNormal;
+}
+
+struct Sphere
+{
+    float3 center;
+    float radius;
+};
+
+bool hit(in const Sphere sphere, in const Ray ray, in const Interval rayT, out HitRecord hitRecord)
+{
+    const float3 oc = sphere.center - ray.origin;
+    const float a = dot(ray.direction, ray.direction);
+    const float h = dot(ray.direction, oc);
+    const float c = dot(oc, oc) - sphere.radius * sphere.radius;
+    const float discriminant = h*h - a*c;
+
+    if (discriminant < 0.0f)
+	{
+        return false;
+    }
+
+    const float sqrtD = sqrt(discriminant);
+
+    float root = (h - sqrtD) / a;
+    if (!interval_surrounds(rayT, root))
+    {
+        root = (h + sqrtD) / a;
+        if (!interval_surrounds(rayT, root))
+        {
+            return false;
+        }
+    }
+
+    hitRecord.t = root;
+    hitRecord.point = ray_at(ray, hitRecord.t);
+    const float3 outwardNormal = (hitRecord.point - sphere.center) / sphere.radius;
+    hitRecord_setFaceNormal(hitRecord, ray, outwardNormal);
+
+    return true;
+}

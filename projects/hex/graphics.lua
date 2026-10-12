@@ -36,6 +36,7 @@ project "graphics"
     "%{dependencies.glfw}/include",
     "%{dependencies.imgui}",
     "%{dependencies.imgui}/backends",
+    "%{dependencies.stb}",
 
     "%{prj_src.hex}/maths/",
   }
@@ -55,6 +56,11 @@ project "graphics"
 
   -- IMGUI
   filter "files:**/imgui-1.92.9b-docking/**.cpp"
+    warnings "Off"
+  filter {}
+
+  -- STB
+  filter "files:**/stbImage.cpp"
     warnings "Off"
   filter {}
 
