@@ -36,3 +36,16 @@ inline bool interval_surrounds(in const Interval interval, in const float x)
 {
     return interval.min < x && x < interval.max;
 }
+
+inline float interval_clamp(in const Interval interval, in const float x)
+{
+    if (x < interval.min)
+    {
+        return interval.min;
+    }
+    if (x > interval.max)
+    {
+        return interval.max;
+    }
+    return x;
+}

@@ -20,6 +20,9 @@ namespace graphics
 
     void RayTracingPassData::recalculate()
     {
+        mParams.randomSeed = mRandomSeed;
+        mParams.samplesPerPixel = mSamplesPerPixel;
+
         const float viewportHeight = 2.0f;
         const float aspectRatio = static_cast<float>(IMAGE_WIDTH) / static_cast<float>(IMAGE_HEIGHT);
         const float viewportWidth = viewportHeight * aspectRatio;
@@ -59,6 +62,8 @@ namespace graphics
         if (ImGui::CollapsingHeader("Ray Tracing Params"))
         {
             bool changed = false;
+            changed |= ImGui::InputInt("Random Seed", reinterpret_cast<int*>(&mRandomSeed));
+            changed |= ImGui::InputInt("Samples Per Pixel", reinterpret_cast<int*>(&mSamplesPerPixel));
             changed |= ImGui::DragFloat3("Camera Center", reinterpret_cast<float*>(&mCameraCenter));
             changed |= ImGui::DragFloat("Focal Length", &mFocalLength);
 
@@ -87,6 +92,9 @@ namespace graphics
 
     void RayTracingPassData::reset()
     {
+        mRandomSeed = 0x1deadb0b;
+        mSamplesPerPixel = 1;
+
         mCameraCenter = vec3f(0.0f);
         mFocalLength = 1.0f;
         recalculate();

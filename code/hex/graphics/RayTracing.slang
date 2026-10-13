@@ -17,6 +17,12 @@ struct RayTracingParams
 
     float3 pixelDeltaV;
     const uint _pad3;
+
+    uint32_t randomSeed;
+    uint32_t samplesPerPixel;
+
+    const uint _pad4;
+    const uint _pad5;
 };
 
 ConstantBuffer<PassConstants> passConstants;
@@ -48,6 +54,28 @@ bool hit(in const Ray ray, in Interval rayT, out HitRecord hitRecord)
     return hitAnything;
 }
 
+float2 sample_square(inout uint randomNumberState)
+{
+    return float2(
+        random_float(randomNumberState) - 0.5f,
+        random_float(randomNumberState) - 0.5f
+    );
+}
+
+Ray ray_get(in const uint2 pixel, inout uint randomNumberState)
+{
+    const float2 offset = sample_square(randomNumberState);
+
+    const float3 pixelSample = rayTracingParams.pixel00Loc.xyz 
+                             + (float(pixel.x) + offset.x) * rayTracingParams.pixelDeltaU.xyz 
+                             + (float(pixel.y) + offset.y) * rayTracingParams.pixelDeltaV.xyz;
+
+    Ray r;
+    r.origin = rayTracingParams.cameraCenter.xyz;
+    r.direction = pixelSample - r.origin;
+    return r;
+}
+
 float3 ray_color(in const Ray ray)
 {
     HitRecord hitRecord;
@@ -77,13 +105,18 @@ void computeMain(
         return;
     }
 
-    const float3 pixelCenter = rayTracingParams.pixel00Loc + float(dtid.x) * rayTracingParams.pixelDeltaU + float(dtid.y) * rayTracingParams.pixelDeltaV;
+    uint randomNumberState = dtid.x + dtid.y * 65536u;
+    randomNumberState ^= rayTracingParams.randomSeed * 2654435761u; // Knuth's multiplicative hash
+    pcg_hash(randomNumberState);
 
-    Ray ray;
-    ray.origin = rayTracingParams.cameraCenter;
-    ray.direction = pixelCenter - rayTracingParams.cameraCenter;
+    float3 pixelColor = float3(0.0f);
+    [loop]
+    for (uint sample = 0; sample < rayTracingParams.samplesPerPixel; ++sample)
+    {
+        Ray ray = ray_get(dtid.xy, randomNumberState);
+        pixelColor += ray_color(ray);
+    }
 
-    const float3 pixelColor = ray_color(ray);
-
-    outputImage[dtid.xy] = float4(pixelColor, 1.0f);
+    pixelColor /= max(1.0f, float(rayTracingParams.samplesPerPixel));
+    outputImage[dtid.xy] = float4(saturate(pixelColor), 1.0f);
 }

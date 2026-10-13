@@ -22,8 +22,8 @@ namespace graphics
     class RayTracingPassData : public PassData
     {
     public:
-        static constexpr uint32_t IMAGE_WIDTH = 3840;
-        static constexpr uint32_t IMAGE_HEIGHT = 2160;
+        static constexpr uint32_t IMAGE_WIDTH = 800;
+        static constexpr uint32_t IMAGE_HEIGHT = 400;
         static constexpr VkFormat SCENE_COLOR_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
 
         struct Params
@@ -32,6 +32,9 @@ namespace graphics
             vec3f pixel00Loc;
             vec3f pixelDeltaU;
             vec3f pixelDeltaV;
+
+            uint32_t randomSeed;
+            uint32_t samplesPerPixel;
         };
 
         RayTracingPassData();
@@ -49,6 +52,9 @@ namespace graphics
         void recalculate();
 
     private:
+        uint32_t mRandomSeed = 0x1deadb0b;
+        uint32_t mSamplesPerPixel = 1;
+
         vec3f mCameraCenter = vec3f(0.0f);
         float mFocalLength = 1.0f;
 

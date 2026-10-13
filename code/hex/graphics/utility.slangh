@@ -7,3 +7,20 @@ static inline float toRadians(in const float degrees)
 {
     return degrees * PI / 180.0;
 }
+
+uint pcg_hash(inout uint state)
+{
+    state = state * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float random_float(inout uint state)
+{
+    return float(pcg_hash(state)) / 4294967296.0f; // divide by 2^32
+}
+
+float random_float(inout uint state, float min, float max)
+{
+    return min + (max - min) * random_float(state);
+}
