@@ -22,8 +22,8 @@ namespace graphics
     class RayTracingPassData : public PassData
     {
     public:
-        static constexpr uint32_t IMAGE_WIDTH = 800;
-        static constexpr uint32_t IMAGE_HEIGHT = 400;
+        static constexpr uint32_t IMAGE_WIDTH = 3840;
+        static constexpr uint32_t IMAGE_HEIGHT = 2160;
         static constexpr VkFormat SCENE_COLOR_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
 
         struct Params
