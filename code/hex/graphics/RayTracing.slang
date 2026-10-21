@@ -21,7 +21,8 @@ struct RayTracingParams
     uint32_t randomSeed;
     uint32_t samplesPerPixel;
 
-    const uint _pad4;
+    float quadZ;
+
     const uint _pad5;
 };
 
@@ -34,24 +35,25 @@ static const Sphere SCENE_SPHERES[SPHERE_COUNT] = {
     { float3(0.0f, 0.0f, -1.0f), 0.5f },
     { float3(0.0f, -100.5f, -1.0f), 100.0f }
 };
-bool hit(in const Ray ray, in Interval rayT, out HitRecord hitRecord)
+bool hit(in const Ray ray, in Interval rayT, out HitRecord hitRecord, inout float2 hitUV)
 {
     HitRecord tempRec;
     bool hitAnything = false;
 
-    float closestSoFar = rayT.max;
-    [unroll]
-    for (uint i = 0; i < SPHERE_COUNT; ++i)
-    {
-        if (hit(SCENE_SPHERES[i], ray, {rayT.min, closestSoFar}, tempRec))
-        {
-            hitAnything = true;
-            closestSoFar = tempRec.t;
-            hitRecord = tempRec;
-        }
-    }
+    Quad checkerQuad = make_quad(
+        float3(-0.5f, -0.5f, -rayTracingParams.quadZ),
+        float3(1.0f, 0.0f, 0.0f),
+        float3(0.0f, 1.0f, 0.0f)
+    );
 
-    return hitAnything;
+    return hit(checkerQuad, ray, rayT, hitRecord, hitUV);
+}
+
+float3 checkerboard_8x8(in const float2 uv)
+{
+    const int2 tile = int2(floor(uv * 8.0f));
+    const bool isEven = ((tile.x + tile.y) & 1) == 0;
+    return isEven ? float3(1.0f, 1.0f, 1.0f) : float3(0.0f, 0.0f, 0.0f);
 }
 
 float2 sample_square(inout uint randomNumberState)
@@ -64,7 +66,9 @@ float2 sample_square(inout uint randomNumberState)
 
 Ray ray_get(in const uint2 pixel, inout uint randomNumberState)
 {
-    const float2 offset = sample_square(randomNumberState);
+    const float2 offset = (rayTracingParams.samplesPerPixel <= 1)
+                              ? float2(0.0f, 0.0f)
+                              : sample_square(randomNumberState);
 
     const float3 pixelSample = rayTracingParams.pixel00Loc.xyz 
                              + (float(pixel.x) + offset.x) * rayTracingParams.pixelDeltaU.xyz 
@@ -79,10 +83,11 @@ Ray ray_get(in const uint2 pixel, inout uint randomNumberState)
 float3 ray_color(in const Ray ray)
 {
     HitRecord hitRecord;
-    const bool didHit = hit(ray, { 0.0f, INFINITY }, hitRecord);
+    float2 uv;
+    const bool didHit = hit(ray, { 0.0f, INFINITY }, hitRecord, uv);
     if (didHit)
     {
-        return 0.5f * (hitRecord.normal + 1.0f);
+        return checkerboard_8x8(uv);
     }
 
     const float3 unit_direction = normalize(ray.direction);

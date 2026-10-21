@@ -55,3 +55,56 @@ bool hit(in const Sphere sphere, in const Ray ray, in const Interval rayT, out H
 
     return true;
 }
+
+struct Quad
+{
+    float3 Q;
+    float3 u;
+    float3 v;
+    float3 normal;
+    float3 w;
+};
+
+Quad make_quad(in const float3 origin, in const float3 u, in const float3 v)
+{
+    Quad q;
+    q.Q = origin;
+    q.u = u;
+    q.v = v;
+    float3 n = cross(u, v);
+    q.normal = normalize(n);
+    q.w = n / dot(n, n);
+    return q;
+}
+
+bool hit(in const Quad quad, in const Ray ray, in const Interval rayT, out HitRecord hitRecord, out float2 uv)
+{
+    const float denom = dot(quad.normal, ray.direction);
+    if (abs(denom) < 1e-6f)
+    {
+        return false;
+    }
+
+    const float t = dot(quad.Q - ray.origin, quad.normal) / denom;
+    if (!interval_surrounds(rayT, t))
+    {
+        return false;
+    }
+
+    const float3 intersection = ray_at(ray, t);
+    const float3 planarHitPt = intersection - quad.Q;
+
+    const float alpha = dot(quad.w, cross(planarHitPt, quad.v));
+    const float beta = dot(quad.w, cross(quad.u, planarHitPt));
+
+    if (alpha < 0.0f || alpha > 1.0f || beta < 0.0f || beta > 1.0f)
+    {
+        return false;
+    }
+
+    uv = float2(alpha, beta);
+    hitRecord.t = t;
+    hitRecord.point = intersection;
+    hitRecord_setFaceNormal(hitRecord, ray, quad.normal);
+    return true;
+}

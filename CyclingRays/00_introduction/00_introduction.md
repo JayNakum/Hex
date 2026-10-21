@@ -1,4 +1,4 @@
-## Introduction
+# Introduction
 
 ![my artwork](https://i.pinimg.com/736x/fa/6a/eb/fa6aeb92c7dc2abe683b90f82cad8324.jpg)
 
@@ -17,8 +17,7 @@ Rendering is one such area where I personally have been very curious about each 
 Cycles has been my primary choice when rendering my scenesd. Since it is a *path tracing renderer* it allows very complex light simulations and can deliver impressive results. But what is path tracing, why does it allow complex light simulations and why is it slower compared to other renderers such as [EEVEE](https://docs.blender.org/manual/en/latest/render/eevee/index.html), what can we do to get our results in reasonable time, what does each of the setting do, what does the code look like, how to make it render fast, and how to tweak the values optimally. These are all the questions that we will attempt to answer in this book.  
 While we do take cycles as our primary example, if you do not use cycles, the core concepts discussed here remain the same across all the path tracing renderers and this book will work as a base and will provide a direction for you to further explore your renderer of choice.
 
-Each chapter focuses on all the settings that are understood by a common concept. And by the end, you can expect to have a good understanding of path tracing and how to get quality results in minimum possible time. This book is for both artists who renders their own scenes and programmers who are interested in ray tracing and GPU programming. From sharing my artwork to writing custom C++ experiments, we are going to dive as much as we need.
-
+This book is for both artists and programmers. From sharing my artwork to writing custom C++ experiments, we are going to dive as deep as we need.  
 As artist, you will get to understand the internals of a renderer. This book does include some C++ code, it is not at all expected from you to understand any of it. I provide visual diagram of the flow of the code and its there (and is needed) to completely understand a renderer. I will also mention the parts that you can skip over if your focus is to only achieve faster render times.
 
 As rendering prorgammer, you will get a detailed look at one of the most popular rendering engines, Cycles. It will be very fruitful if you clone the [cycles repository](https://projects.blender.org/blender/cycles) and take a look at code yourself as the book advances. I would also recommend that you take a look at [Ray Tracing in One Weekend - The Book Series](https://raytracing.github.io/) before you start reading this book.
@@ -26,13 +25,18 @@ As rendering prorgammer, you will get a detailed look at one of the most popular
 A personal aim for writing this book is that I would love to share my artwork with you all! All the artwork and examples showcased in this book are made by yours truly :)  
 If you wish to see more, please drop a follow on [instagram @0xArt3D](https://www.instagram.com/0xart3d/) and on [artstation @JayNakum](https://www.artstation.com/jaynakum).
 
+## Book Chapters #TODO
+Each chapter focuses on all the settings that are understood by a common concept. And by the end, you can expect to have a good understanding of path tracing and how to get quality results in minimum possible time.
+1. Sampling
+	The first setting that is shown in the render properties tab. In this chapter start by understanding pixels
+
 ## For Programmers
 As I mentioned earlier, I have also written custom C++ experiments throughout the book, I think it would be best to start by explaining the framework that I have designed to allow for such experiments. Artists can completely skip over this section.  
 I am calling this render engine Hex. It is written in C++ and uses [Vulkan](https://vulkan.org/) as the primary graphics API. For vulkan I am using [Vulkan Profiles](https://docs.vulkan.org/guide/latest/vulkan_profiles.html) to easily manage the features and extensions. And I am using [Volk](https://github.com/zeux/volk) for dynamically load entrypoints without linking vulkan loaders.  
 The rendering architecture is similar to my [d3d renderer Harmony](https://jaynakum.github.io/blog/5/GerstnerWaves#a-bit-about-harmony) with [memory management](https://jaynakum.github.io/blog/7/GPUMemoryManagement) and [shader input management](https://jaynakum.github.io/blog/7/GPUMemoryManagement) systems. However, since Vulkan is much more explicit by design, additional controls are provided to utilize it fully. This engine is designed with vulkan in mind only and hence does not include a separate API abstraction layer unlike Harmony. For example here, the command context directly makes vulkan calls. Following this simplified the code a little bit and allowed me to jump into ray tracing directly.  
 For shaders, I am using [Slang](https://shader-slang.org/) and currently the engine is setup to have one compute pass for ray tracing and one present pass that displays our image on swapchain.
 
-I don't feel the need to share the fully working projects because this book is not a C++ path tracer tutorial but the aim is to understand the core concepts of path tracing with a good example by our side so that we can explore other projects and when needed, write our own renderer without spoon feeding tutorials.
+I don't feel the need to share the fully working projects because this book is not a C++ path tracer tutorial but the aim is to understand the core concepts of path tracing with a good example by our side so that we can explore other path tracers and write our own renderer without such spoon feeding tutorials.
 
 ## Ray Tracing
 [![Ray Tracing In One Weekend Image](https://raytracing.github.io/images/img-1.23-book1-final.jpg)](https://raytracing.github.io/books/RayTracingInOneWeekend.html)

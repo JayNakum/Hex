@@ -23,6 +23,8 @@ namespace graphics
         mParams.randomSeed = mRandomSeed;
         mParams.samplesPerPixel = mSamplesPerPixel;
 
+        mParams.quadZ = mQuadZ;
+
         const float viewportHeight = 2.0f;
         const float aspectRatio = static_cast<float>(IMAGE_WIDTH) / static_cast<float>(IMAGE_HEIGHT);
         const float viewportWidth = viewportHeight * aspectRatio;
@@ -67,6 +69,8 @@ namespace graphics
             changed |= ImGui::DragFloat3("Camera Center", reinterpret_cast<float*>(&mCameraCenter));
             changed |= ImGui::DragFloat("Focal Length", &mFocalLength);
 
+            changed |= ImGui::SliderFloat("Quad Position", &mQuadZ, 0.0f, 80.0f);
+
             if (changed)
             {
                 recalculate();
@@ -94,6 +98,7 @@ namespace graphics
     {
         mRandomSeed = 0x1deadb0b;
         mSamplesPerPixel = 1;
+        mQuadZ = 1.0f;
 
         mCameraCenter = vec3f(0.0f);
         mFocalLength = 1.0f;
